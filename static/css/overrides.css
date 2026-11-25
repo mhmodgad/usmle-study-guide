@@ -92,3 +92,13 @@ details > summary::-webkit-details-marker { display: none; }
 details.chapter-acc > summary { list-style: none; }
 details.chapter-acc > summary::-webkit-details-marker { display: none; }
 details.chapter-acc[open] > summary .acc-chevron { transform: rotate(90deg); }
+
+/* ---- /libraries list cards ---- */
+.min-h-\[26rem\] { min-height: 26rem; }
+.inset-x-14 { left: 3.5rem; right: 3.5rem; }
+.size-72 { width: 18rem; height: 18rem; }
+.size-56 { width: 14rem; height: 14rem; }
+.size-40 { width: 10rem; height: 10rem; }
+.size-32 { width: 8rem; height: 8rem; }
+.bg-background\/55 { background-color: color-mix(in oklab, var(--background) 55%, transparent); }
+.bg-primary\/8 { background-color: color-mix(in oklab, var(--primary) 8%, transparent); }

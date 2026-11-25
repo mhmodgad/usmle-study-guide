@@ -470,12 +470,64 @@ def _consistency_summary(full=False):
         streak += 1
         cur -= datetime.timedelta(days=1)
     longest = _longest_streak(sorted(dayset))
+    total_minutes = int(round(total_units * 15))
     out = {"goal_units": goal_units, "total_units": round(total_units, 1),
            "active_days": active, "days_at_goal": at_goal, "today_units": today_units,
-           "current_streak": streak, "longest_streak": longest}
+           "current_streak": streak, "longest_streak": longest,
+           "total_hours": total_minutes // 60, "total_mins": total_minutes % 60,
+           "avg_units": round(total_units / active, 1) if active else 0}
     if full:
         out["days"] = days
+        out["heatmap"], out["months"] = _consistency_heatmap(days, goal_units)
+        # current week strip (Mon..Sun)
+        by_day = {d["day"]: d["units"] for d in days}
+        monday = datetime.date.today() - datetime.timedelta(days=datetime.date.today().weekday())
+        out["week"] = []
+        for i in range(7):
+            dt = monday + datetime.timedelta(days=i)
+            u = by_day.get(dt.isoformat(), 0)
+            out["week"].append({"label": "MTWTFSS"[i], "date": dt.isoformat(),
+                                "units": u, "today": dt == datetime.date.today(),
+                                "level": _heat_level(u, goal_units)})
     return out
+
+
+def _heat_level(units, goal):
+    if units <= 0:
+        return 0
+    if units < goal / 2:
+        return 1
+    if units < goal:
+        return 2
+    return 3
+
+
+def _consistency_heatmap(days, goal, weeks=18):
+    """GitHub-style grid: list of week-columns, each 7 day cells (Mon..Sun)."""
+    import datetime
+    by_day = {d["day"]: d["units"] for d in days}
+    today = datetime.date.today()
+    # start on the Monday `weeks` weeks back
+    start = today - datetime.timedelta(days=today.weekday() + 7 * (weeks - 1))
+    grid, month_row, last_month = [], [], None
+    cur = start
+    for w in range(weeks):
+        col = []
+        for d in range(7):
+            dt = cur + datetime.timedelta(days=d)
+            u = by_day.get(dt.isoformat(), 0)
+            col.append({"date": dt.isoformat(), "units": u,
+                        "level": _heat_level(u, goal) if dt <= today else -1})
+        # month label aligned to the column where a new month starts
+        mlabel = col[0]["date"][:7]
+        if mlabel != last_month:
+            month_row.append(datetime.date.fromisoformat(col[0]["date"]).strftime("%b"))
+            last_month = mlabel
+        else:
+            month_row.append("")
+        grid.append(col)
+        cur += datetime.timedelta(days=7)
+    return grid, month_row
 
 
 def _longest_streak(sorted_days):

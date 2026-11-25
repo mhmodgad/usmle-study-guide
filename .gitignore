@@ -1,11 +1,16 @@
 .venv/
 __pycache__/
 *.pyc
+.DS_Store
+
+# Built database (large; rebuildable from content)
 data/*.db
 data/*.db-wal
 data/*.db-shm
-.DS_Store
 
-# In-project data (media/images/videos/fonts/icons + captured content) — not redistributed
-local/*
-!local/README.md
+# Heavy / copyrighted data that should NOT be in git:
+#   - topic images & videos
+#   - the educational content the loader reads
+# Everything else under local/ (css, icons, fonts, editor, logos) IS tracked.
+local/assets/media/
+local/content/

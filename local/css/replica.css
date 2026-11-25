@@ -1,0 +1,56 @@
+/* Replica-only additions (hand-written). Uses the app's own CSS variables so
+   dark/light both work. Everything else on the pages is the app's compiled CSS.
+   The profile menu and notifications panel use the app's captured markup, so
+   only the search rows / inputs / mobile sheet below are replica CSS. */
+
+/* search results inside the captured dialog shell */
+.r-search-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--popover-foreground, inherit);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.r-search-row:hover, .r-search-row[data-selected="true"] { background: var(--accent, #1a2530); }
+.r-search-row .r-title { font-size: 13px; font-weight: 500; }
+.r-search-row .r-crumb { font-size: 11px; color: var(--muted-foreground, #8b98a5); }
+.r-search-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border, #2a3441);
+  border-radius: 8px;
+  background: var(--background, transparent);
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+.r-search-count {
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  color: var(--muted-foreground, #8b98a5);
+}
+
+/* mobile sidebar sheet + backdrop */
+.r-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: rgba(0, 0, 0, 0.55);
+}
+div[data-app-sidebar].r-mobile-open {
+  display: block !important;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 16rem;
+  z-index: 50;
+}
