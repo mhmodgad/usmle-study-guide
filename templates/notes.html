@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Notes | TEMP-U{% endblock %}
+{% block main %}
+<div class="mx-auto flex w-full max-w-4xl flex-col gap-5">
+  <div class="flex items-center gap-2">
+    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.4 2.6a2 2 0 0 1 3 3L9 18l-4 1 1-4Z"></path></svg>
+    <h1 class="text-2xl font-bold tracking-tight">Notes</h1>
+    <input id="note-search" type="search" placeholder="Search notes" class="ml-auto h-9 w-64 rounded-lg border bg-background px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-control-focus">
+  </div>
+
+  <div class="flex flex-wrap items-center gap-2">
+    <a href="/notes?view=topic" class="inline-flex flex-col rounded-lg border px-4 py-1.5 text-sm {% if view=='topic' %}bg-accent text-accent-foreground{% else %}hover:bg-accent{% endif %}">
+      <span class="font-medium">Topic notes</span><span class="text-[11px] text-muted-foreground">Notes you wrote for a whole topic</span></a>
+    <a href="/notes?view=inline" class="inline-flex flex-col rounded-lg border px-4 py-1.5 text-sm {% if view=='inline' %}bg-accent text-accent-foreground{% else %}hover:bg-accent{% endif %}">
+      <span class="font-medium">Inline notes</span><span class="text-[11px] text-muted-foreground">Notes you attached to a highlighted passage</span></a>
+    <span class="ml-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{{ notes|length }}</span>
+    <label class="ml-auto inline-flex items-center gap-2 text-sm text-muted-foreground" title="Detailed shows longer notes and their source location.">
+      <input type="checkbox" id="detailed-toggle"> Detailed</label>
+  </div>
+
+  {% if view=='topic' and chapters %}
+  <div class="flex flex-wrap gap-2">
+    <a href="/notes?view=topic" class="rounded-full border px-3 py-1 text-xs {% if not chapter_filter %}bg-accent{% endif %}">All chapters</a>
+    {% for c in chapters %}
+    <a href="/notes?view=topic&chapter={{ c.id }}" class="rounded-full border px-3 py-1 text-xs {% if chapter_filter==c.id %}bg-accent{% endif %}">{{ c.title }} ({{ c.n }})</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="overflow-hidden rounded-xl bg-card card-surface" id="note-list">
+    {% for n in notes %}
+    {% set reader = '/libraries/' ~ n.library_id ~ '/chapters/' ~ n.chapter_id ~ '/sections/' ~ n.section_id ~ '#topic-' ~ n.topic_id %}
+    {% if view=='topic' %}
+    <article class="note-card group/note relative border-b border-border/70 transition-colors last:border-b-0 hover:bg-muted/25" data-text="{{ ((n.topic_title or '') ~ ' ' ~ (n.plain_text or ''))|lower }}">
+      <button type="button" class="open-note flex w-full flex-col gap-2 px-4 py-5 pr-12 text-left outline-none sm:px-5" data-topic="{{ n.topic_id }}" data-title="{{ n.topic_title }}">
+        <span class="flex w-full items-center gap-3">
+          <span class="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.4 2.6a2 2 0 0 1 3 3L9 18l-4 1 1-4Z"></path></svg>
+            <span class="min-w-0 break-words text-foreground">{{ n.topic_title }}</span>
+          </span>
+          <time class="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">{{ n.updated_at|monthday }}</time>
+        </span>
+        {% if n.plain_text %}<span class="note-preview max-w-3xl whitespace-pre-line line-clamp-2 text-base font-medium leading-7 text-foreground">{{ n.plain_text }}</span>{% endif %}
+        <span class="note-source hidden text-xs text-muted-foreground">{{ n.chapter_title }}{% if n.section_title %} · {{ n.section_title }}{% endif %}</span>
+      </button>
+      <div class="absolute right-2 top-3 sm:right-3">
+        <button type="button" class="note-actions rounded-md p-1.5 text-muted-foreground hover:bg-accent" aria-label="Actions for the note on {{ n.topic_title }}" data-topic="{{ n.topic_id }}" data-reader="{{ reader }}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
+        </button>
+      </div>
+    </article>
+    {% else %}
+    <a href="{{ reader }}" class="note-card group/note relative block border-b border-border/70 transition-colors last:border-b-0 hover:bg-muted/25" data-text="{{ ((n.selected_text or '') ~ ' ' ~ (n.note_text or '') ~ ' ' ~ (n.topic_title or ''))|lower }}">
+      <div class="flex w-full flex-col gap-2 px-4 py-5 sm:px-5">
+        <span class="flex w-full items-center gap-3">
+          <span class="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground"><span class="text-foreground">{{ n.topic_title }}</span></span>
+          <time class="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">{{ n.updated_at|monthday }}</time>
+        </span>
+        {% if n.selected_text %}<span class="rounded border-l-2 border-tag-yellow bg-tag-yellow/10 px-2 py-1 text-sm italic text-foreground line-clamp-2">{{ n.selected_text }}</span>{% endif %}
+        {% if n.note_text %}<span class="text-sm">{{ n.note_text }}</span>{% endif %}
+        <span class="note-source hidden text-xs text-muted-foreground">{{ n.chapter_title }}{% if n.section_title %} · {{ n.section_title }}{% endif %}</span>
+      </div>
+    </a>
+    {% endif %}
+    {% else %}
+    <p class="p-8 text-center text-sm text-muted-foreground">No {{ view }} notes yet. Open a topic and start writing.</p>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- per-note actions menu -->
+<div id="note-menu" class="fixed z-[75] hidden w-44 overflow-hidden rounded-lg border bg-popover shadow-xl">
+  <button id="nm-open" class="block w-full px-3 py-2 text-left text-sm hover:bg-accent">Edit note</button>
+  <a id="nm-topic" class="block w-full px-3 py-2 text-left text-sm hover:bg-accent" href="#">Open topic</a>
+  <button id="nm-delete" class="block w-full px-3 py-2 text-left text-sm text-destructive hover:bg-accent">Delete note</button>
+</div>
+{% endblock %}
+{% block scripts %}<script>
+(function(){
+  // search
+  document.getElementById('note-search').addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('.note-card').forEach(c => c.style.display = (!q || c.dataset.text.includes(q)) ? '' : 'none');
+  });
+  // detailed toggle: longer preview + source location
+  document.getElementById('detailed-toggle').addEventListener('change', e => {
+    document.querySelectorAll('.note-preview').forEach(p => p.classList.toggle('line-clamp-2', !e.target.checked));
+    document.querySelectorAll('.note-source').forEach(p => p.classList.toggle('hidden', !e.target.checked));
+  });
+  // open editor on card click (topic notes)
+  document.querySelectorAll('.open-note').forEach(b => b.addEventListener('click', () => {
+    window.TempuNoteEditor.open(b.dataset.topic, b.dataset.title);
+  }));
+  // actions menu
+  const menu = document.getElementById('note-menu');
+  let curTopic=null, curReader=null;
+  document.querySelectorAll('.note-actions').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    curTopic=b.dataset.topic; curReader=b.dataset.reader;
+    const r=b.getBoundingClientRect();
+    menu.style.left=(r.right-176)+'px'; menu.style.top=(r.bottom+4)+'px';
+    menu.classList.remove('hidden');
+    document.getElementById('nm-topic').href=curReader;
+  }));
+  document.getElementById('nm-open').onclick=()=>{menu.classList.add('hidden');
+    const card=document.querySelector(`.open-note[data-topic="${curTopic}"]`);
+    window.TempuNoteEditor.open(curTopic, card?card.dataset.title:'Note');};
+  document.getElementById('nm-delete').onclick=async()=>{menu.classList.add('hidden');
+    if(!confirm('Delete this note?'))return;
+    await fetch('/api/notes/topic/'+curTopic,{method:'DELETE'}); location.reload();};
+  document.addEventListener('click', e=>{ if(!menu.contains(e.target)) menu.classList.add('hidden'); });
+  // reflect live saves: update preview when editor saves
+  document.addEventListener('note-saved', e => {
+    if(!e.detail.hasText){ const c=document.querySelector(`.open-note[data-topic="${e.detail.topic}"]`); }
+  });
+})();
+</script>{% endblock %}

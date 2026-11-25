@@ -1,0 +1,98 @@
+{% extends "settings_layout.html" %}
+{% set settings_tab = 'account' %}
+{% set page_title = 'Account' %}
+{% block settings_body %}
+<form data-settings data-reload="1" class="flex flex-col gap-6">
+  <h2 class="text-lg font-semibold">Account</h2>
+  <div class="flex items-center gap-4">
+    <span id="avatar-preview" class="flex size-16 items-center justify-center overflow-hidden rounded-full bg-tag-purple/12 text-xl font-semibold text-tag-purple">
+      {% if current.get('avatar') %}<img src="{{ current.avatar }}" alt="" class="size-full object-cover">{% else %}{{ initials }}{% endif %}
+    </span>
+    <div>
+      <p class="text-sm font-medium">Profile photo</p>
+      <div class="mt-1 flex items-center gap-2">
+        <label class="inline-flex cursor-pointer items-center rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-accent">
+          Upload photo<input id="avatar-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label>
+        <button type="button" id="avatar-remove" class="inline-flex items-center rounded-lg border px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-accent {% if not current.get('avatar') %}hidden{% endif %}">Remove</button>
+      </div>
+      <p class="mt-1 text-xs text-muted-foreground">JPG, PNG, WebP, or GIF · Up to 5 MB. Initials appear without a photo.</p>
+      <p id="avatar-status" class="mt-1 text-xs text-muted-foreground"></p>
+    </div>
+  </div>
+  <label class="block"><span class="text-sm font-medium">Full name</span>
+    <input name="displayName" value="{{ current.get('displayName','') }}" class="mt-1 h-10 w-full rounded-lg border bg-background px-3 text-sm"></label>
+  <label class="block"><span class="text-sm font-medium">Email</span>
+    <input value="{{ current.get('email','mohamedatef28112000@gmail.com') }}" disabled class="mt-1 h-10 w-full rounded-lg border bg-muted px-3 text-sm text-muted-foreground">
+    <span class="mt-1 block text-xs text-muted-foreground">Your email is managed through your authentication provider and cannot be changed here.</span></label>
+  <label class="block"><span class="text-sm font-medium">Date of birth</span>
+    <input name="dateOfBirth" type="date" value="{{ current.get('dateOfBirth','2000-12-04') }}" class="mt-1 h-10 w-full rounded-lg border bg-background px-3 text-sm"></label>
+  <label class="block"><span class="text-sm font-medium">Gender</span>
+    <select name="gender" class="mt-1 h-10 w-full rounded-lg border bg-background px-3 text-sm">
+      {% for g in ['Male','Female','Other','Prefer not to say'] %}<option {{ 'selected' if current.get('gender','Male')==g }}>{{ g }}</option>{% endfor %}
+    </select></label>
+  <label class="block"><span class="text-sm font-medium">Nationality</span>
+    <input name="nationality" value="{{ current.get('nationality','Egypt') }}" class="mt-1 h-10 w-full rounded-lg border bg-background px-3 text-sm"></label>
+  <label class="block"><span class="text-sm font-medium">Phone number</span>
+    <input name="phone" value="{{ current.get('phone','+20') }}" class="mt-1 h-10 w-full rounded-lg border bg-background px-3 text-sm"></label>
+  <div class="flex items-center gap-3">
+    <button type="submit" disabled class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">Save changes</button>
+    <span class="save-status text-sm text-muted-foreground"></span>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+<script>
+(function () {
+  const input = document.getElementById('avatar-input');
+  const preview = document.getElementById('avatar-preview');
+  const removeBtn = document.getElementById('avatar-remove');
+  const status = document.getElementById('avatar-status');
+
+  function downscale(file, max, cb) {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      cb(c.toDataURL('image/webp', 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); status.textContent = 'Could not read that image.'; };
+    img.src = url;
+  }
+
+  input.addEventListener('change', () => {
+    const f = input.files[0]; if (!f) return;
+    if (f.size > 5 * 1024 * 1024) { status.textContent = 'Image is larger than 5 MB.'; return; }
+    status.textContent = 'Uploading…';
+    downscale(f, 256, async (dataUrl) => {
+      const r = await fetch('/api/avatar', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({data: dataUrl})});
+      const d = await r.json();
+      if (!d.ok) { status.textContent = d.error || 'Upload failed.'; return; }
+      preview.innerHTML = '<img src="' + dataUrl + '" alt="" class="size-full object-cover">';
+      removeBtn.classList.remove('hidden');
+      status.textContent = 'Photo updated';
+      updateHeaderAvatar(dataUrl);
+    });
+    input.value = '';
+  });
+
+  removeBtn.addEventListener('click', async () => {
+    await fetch('/api/avatar', {method: 'DELETE'});
+    preview.textContent = '{{ initials }}';
+    removeBtn.classList.add('hidden');
+    status.textContent = 'Photo removed';
+    updateHeaderAvatar(null);
+  });
+
+  function updateHeaderAvatar(dataUrl) {
+    const headerAvatar = document.querySelector('header [class*="bg-tag-purple/12"]');
+    if (!headerAvatar) return;
+    headerAvatar.innerHTML = dataUrl ? '<img src="' + dataUrl + '" alt="" class="size-full object-cover">' : '{{ initials }}';
+  }
+})();
+</script>
+{% endblock %}

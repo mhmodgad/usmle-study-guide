@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}TEMPU Flashcards | TEMP-U{% endblock %}
+{% set accents = ['var(--tag-blue)','var(--tag-purple)','var(--tag-pink)','var(--tag-green)','var(--tag-orange)','var(--tag-cyan)','var(--tag-red)','var(--tag-yellow)'] %}
+{% block main %}
+<div class="mx-auto flex w-full max-w-4xl flex-col gap-6">
+  <div class="flex items-center gap-2">
+    <a href="/flashcards" class="inline-flex h-9 items-center rounded-lg border px-4 text-sm font-medium hover:bg-accent">Decks</a>
+    <a href="/flashcards/stats" class="inline-flex h-9 items-center rounded-lg border px-4 text-sm font-medium hover:bg-accent">Stats</a>
+  </div>
+
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <h1 class="text-2xl font-bold tracking-tight">TEMPU Flashcards
+      <span class="ml-2 align-middle inline-flex items-center rounded-full border border-status-info/20 bg-status-info/10 px-2 py-0.5 text-xs font-medium text-status-info-strong">Beta</span></h1>
+    <div class="flex gap-1 rounded-xl border p-1">
+      {% for l in libraries %}
+      <a href="/flashcards/library?library={{ l.id }}" class="inline-flex h-8 items-center rounded-lg px-3 text-sm font-medium {% if l.id==library_id %}bg-secondary text-secondary-foreground shadow-sm{% else %}text-muted-foreground hover:text-foreground{% endif %}">{{ l.title }}</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <input id="tree-search" type="search" placeholder="Filter systems and topics…" class="h-10 w-full rounded-xl border bg-background px-4 text-sm outline-none focus-visible:ring-3 focus-visible:ring-control-focus">
+
+  <div class="rounded-2xl border bg-card">
+    <div class="divide-y border-border border-y-0 divide-border/60" id="tree">
+      {% for c in chapters %}
+      {% set accent = accents[loop.index0 % accents|length] %}
+      <details class="chapter-group group flex flex-col bg-transparent" style="--deck-accent: {{ accent }};" data-title="{{ c.row.title|lower }}">
+        <summary class="flex w-full items-center cursor-pointer list-none">
+          <div class="flex min-w-0 flex-1 items-center justify-between py-4 px-3 sm:px-4 hover:bg-[color-mix(in_oklab,var(--deck-accent)_5%,transparent)]">
+            <div class="flex min-w-0 items-center gap-2 sm:gap-3">
+              <span aria-hidden="true" class="size-2.5 shrink-0 rounded-full" style="background: var(--deck-accent); box-shadow: 0 0 0 4px color-mix(in oklab, var(--deck-accent) 15%, transparent);"></span>
+              <span class="min-w-0 break-words font-medium sm:truncate">{{ c.row.title }}</span>
+              <span class="shrink-0 tabular-nums rounded-full px-2 py-0.5 text-xs font-medium" style="color: var(--deck-accent); background: color-mix(in oklab, var(--deck-accent) 10%, transparent);">{{ c.cards }}<span class="max-sm:sr-only"> cards</span></span>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              <a role="button" aria-label="Quick review {{ c.row.title }}" class="inline-flex h-7 shrink-0 items-center gap-1 rounded-[min(var(--radius-md),12px)] bg-secondary px-2.5 text-[0.8rem] font-medium hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)]" style="color: var(--deck-accent);" href="/flashcards/review?scope=chapter&id={{ c.row.id }}&title={{ c.row.title|urlencode }}" onclick="event.stopPropagation()">Review</a>
+              <button type="button" aria-label="Add {{ c.row.title }} to a deck" data-add-scope="chapter" data-add-id="{{ c.row.id }}" class="add-to-deck inline-flex h-7 shrink-0 items-center gap-1 rounded-[min(var(--radius-md),12px)] bg-secondary px-2.5 text-[0.8rem] font-medium text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)]" onclick="event.stopPropagation()">Add</button>
+            </div>
+          </div>
+        </summary>
+        <div class="border-t divide-y divide-border/60">
+          {% for s in c.sections %}
+          <div class="px-4 py-3 pl-10">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium">{{ s.row.title }}</span>
+              <a href="/flashcards/review?scope=section&id={{ s.row.id }}&title={{ s.row.title|urlencode }}" class="text-xs hover:underline" style="color: var(--deck-accent)">Review {{ s.cards }}</a>
+            </div>
+            <ul class="mt-2 space-y-1">
+              {% for t in s.topics %}
+              <li class="tree-topic flex items-center justify-between text-sm" data-title="{{ t.title|lower }}">
+                <a href="/flashcards/review?scope=topic&id={{ t.id }}&title={{ t.title|urlencode }}" class="text-muted-foreground hover:text-foreground hover:underline">{{ t.title }}</a>
+                <span class="text-xs text-muted-foreground tabular-nums">{{ t.cards }}</span>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/decks.js') }}"></script>
+<script>
+document.getElementById('tree-search').addEventListener('input', e => {
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll('.chapter-group').forEach(g => {
+    let any = false;
+    g.querySelectorAll('.tree-topic').forEach(li => {
+      const show = !q || li.dataset.title.includes(q);
+      li.style.display = show ? '' : 'none'; if (show) any = true;
+    });
+    const chapMatch = !q || g.dataset.title.includes(q);
+    g.style.display = (any || chapMatch) ? '' : 'none';
+    if (q && any) g.open = true; else if (!q) g.open = false;
+  });
+});
+</script>
+{% endblock %}

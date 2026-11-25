@@ -1,0 +1,27 @@
+{
+  "_note": "The user's personal 'HY' flashcard deck captured from the live account (app.tempusmle.com). These are user-created cards (isOfficial:false), so they are not in the official content files. Front/back text came from the live deck's card previews; card 4 is an image card and card 5's answer is truncated in the preview (flagged with _partial).",
+  "deck": {"id": "c0fe8a36-a6c3-4bbe-89bd-e636688f43a3", "name": "HY", "color_key": "blue"},
+  "cards": [
+    {"id": "a7ac1c99-8227-4e65-b568-2a7c5af650df", "state": "new",
+     "front": "Orotic aciduria→ ↑ orotic acid + megaloblastic anemia but no hyperammonemia.",
+     "back": ""},
+    {"id": "7b6215e8-9c91-4e1c-8af2-fe2a64f21e1c", "state": "new",
+     "front": "Neonatal rash + no erythema + hyperpigmentation + scales + palms & soles ⇒",
+     "back": "Neonatal pustular melanosis"},
+    {"id": "63f40331-10e9-4fb0-9624-24251535699f", "state": "new",
+     "front": "PPROM",
+     "back": "Preterm Premature Rupture of Membranes (pPROM)"},
+    {"id": "cc62c1f4-a533-4f4b-8cb8-2360756b7e3e", "state": "learning",
+     "front": "Management of placental abruption ?",
+     "back": "[image: placental abruption management]", "_partial": "image"},
+    {"id": "44640c39-906f-4b9a-a56d-412db66885ca", "state": "learning",
+     "front": "Management of placental abruption ?",
+     "back": "Initial Management\nFetal heart rate monitoring\nIV access\nOther supportive care\nHemodynamically Unstable or Moderate to Severe Bleeding → Emergency cesarean delivery unless vaginal delivery is imminent.\nHemodynamically Stable with Mild Bleeding + Reassuring Fetal Status → based on Gestational age…", "_partial": "truncated"},
+    {"id": "b252f21e-0f67-4ecc-b562-75d91d78eb66", "state": "learning",
+     "front": "what is the management of Intrahepatic cholestasis of pregnancy ?",
+     "back": "Intrahepatic Cholestasis of Pregnancy"},
+    {"id": "c8bf35f8-52d4-4ade-b42c-64254c0f3cff", "state": "learning",
+     "front": "What is the initial screening test of choice for fetal aneuploidy in pregnant 40 years old women at 11 weeks gestation?",
+     "back": "Cell-free fetal DNA testing\nHigher sensitivity and specificity for detecting aneuploidies than both the first-trimester combined test and second-trimester quadruple screen\nNote, Again! → Must confirm with chorionic villus sampling (10-13 wks) or amniocentesis (15-20 wks)"}
+  ]
+}

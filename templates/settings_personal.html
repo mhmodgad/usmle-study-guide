@@ -1,0 +1,20 @@
+{% extends "settings_layout.html" %}
+{% set settings_tab = 'personal' %}
+{% set page_title = 'Personal' %}
+{% block settings_body %}
+<form data-settings class="flex flex-col gap-6">
+  <h2 class="text-lg font-semibold">Personal</h2>
+  <label class="block"><span class="text-sm font-medium">Current phase</span>
+    <select name="currentPhase" class="mt-1 h-10 w-full rounded-lg border bg-background px-3 text-sm">
+      {% for p in ['Medical student','Intern','Resident','Fellow','Attending','Other'] %}<option {{ 'selected' if current.get('currentPhase','Intern')==p }}>{{ p }}</option>{% endfor %}
+    </select></label>
+  <label class="block"><span class="text-sm font-medium">Medical school</span>
+    <input name="medicalSchool" value="{{ current.get('medicalSchool','') }}" placeholder="Enter your school's official name" class="mt-1 h-10 w-full rounded-lg border bg-background px-3 text-sm">
+    <span class="mt-1 block text-xs text-muted-foreground">Enter your school's official name.</span></label>
+  <div class="flex items-center gap-3">
+    <button type="submit" disabled class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">Save personal details</button>
+    <span class="save-status text-sm text-muted-foreground"></span>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/settings.js') }}"></script>{% endblock %}

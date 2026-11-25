@@ -1,0 +1,42 @@
+{% extends "settings_layout.html" %}
+{% set settings_tab = 'notifications' %}
+{% set page_title = 'Notification Settings' %}
+{% set cats = [
+  ('access','Access and subscriptions','Entitlement lifecycle and approaching expiry.'),
+  ('content','Official content updates','Explicitly announced topic publications and material updates.'),
+  ('study','Study reminders','Optional study activity reminders.'),
+  ('system','System announcements','Optional platform-wide information.'),
+  ('achievements','Achievements','Optional progress milestones.'),
+  ('billing','Billing reminders','Mentorship dates and optional billing reminders.'),
+  ('wallet','Wallet updates','Earnings, adjustments, and payout transitions.'),
+  ('admin','Administrator operations','Permission-scoped review work for administrators.')] %}
+{% block settings_body %}
+<form data-settings class="flex flex-col gap-5">
+  <div>
+    <h2 class="text-lg font-semibold">Notification settings</h2>
+    <p class="mt-1 text-sm text-muted-foreground">Control optional in-application categories. This release does not use digest, quiet-hour, email, SMS, push, or personal Telegram settings.</p>
+  </div>
+
+  <label class="flex items-start justify-between gap-4 rounded-xl border bg-card p-4">
+    <span><span class="text-sm font-medium">Optional notifications</span><br>
+      <span class="text-xs text-muted-foreground">Turn off optional updates across the app. Required account, payment, and access outcomes still arrive.</span></span>
+    <input type="checkbox" name="notifOptional" {{ 'checked' if current.get('notifOptional','true')=='true' }} class="mt-1 size-4">
+  </label>
+
+  <div class="divide-y rounded-xl border">
+    {% for slug, title, desc in cats %}
+    <label class="flex items-start justify-between gap-4 p-4">
+      <span><span class="text-sm font-medium">{{ title }}</span><br><span class="text-xs text-muted-foreground">{{ desc }}</span></span>
+      <input type="checkbox" name="notif_{{ slug }}" {{ 'checked' if current.get('notif_' ~ slug, 'true')=='true' }} class="mt-1 size-4">
+    </label>
+    {% endfor %}
+  </div>
+
+  <p class="text-xs text-muted-foreground">Required notifications are labeled in the inbox and cannot be dismissed, though you can archive them after reading.</p>
+  <div class="flex items-center gap-3">
+    <button type="submit" disabled class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">Save changes</button>
+    <span class="save-status text-sm text-muted-foreground"></span>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/settings.js') }}"></script>{% endblock %}

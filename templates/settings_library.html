@@ -1,0 +1,42 @@
+{% extends "settings_layout.html" %}
+{% set settings_tab = 'library' %}
+{% set page_title = 'Library' %}
+{% block settings_body %}
+<form data-settings data-reload="1" class="flex flex-col gap-6">
+  <h2 class="text-lg font-semibold">Library</h2>
+  <p class="text-sm text-muted-foreground">Set up your reading experience. Text size and spacing use the default layout on phones.</p>
+
+  <div>
+    <p class="text-sm font-medium">Text size</p>
+    <div class="mt-2 inline-flex gap-1 rounded-lg border p-1">
+      {% for px in ['14','15','16','17','18'] %}
+      <button type="button" class="seg-btn rounded-md px-3 py-1.5 text-sm aria-pressed:bg-accent aria-pressed:text-accent-foreground" data-field="readerTextSize" data-value="{{ px }}" aria-pressed="{{ 'true' if current.get('readerTextSize','15')==px else 'false' }}">{{ px }}px</button>
+      {% endfor %}
+    </div>
+    <input type="hidden" name="readerTextSize" value="{{ current.get('readerTextSize','15') }}">
+  </div>
+
+  <div>
+    <p class="text-sm font-medium">Spacing</p>
+    <div class="mt-2 inline-flex gap-1 rounded-lg border p-1">
+      {% for sp in ['compact','default','relaxed'] %}
+      <button type="button" class="seg-btn rounded-md px-3 py-1.5 text-sm capitalize aria-pressed:bg-accent aria-pressed:text-accent-foreground" data-field="readerSpacing" data-value="{{ sp }}" aria-pressed="{{ 'true' if current.get('readerSpacing','default')==sp else 'false' }}">{{ sp }}</button>
+      {% endfor %}
+    </div>
+    <input type="hidden" name="readerSpacing" value="{{ current.get('readerSpacing','default') }}">
+  </div>
+
+  <div class="border-t pt-4">
+    <p class="text-sm font-medium">Content</p>
+    <label class="mt-2 flex items-start gap-3">
+      <input type="checkbox" name="showVideoReferences" {{ 'checked' if current.get('showVideoReferences','true')=='true' }} class="mt-0.5">
+      <span><span class="text-sm font-medium">Show video references</span><br><span class="text-xs text-muted-foreground">Display related videos above each topic.</span></span>
+    </label>
+  </div>
+  <div class="flex items-center gap-3">
+    <button type="submit" disabled class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">Save changes</button>
+    <span class="save-status text-sm text-muted-foreground"></span>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/settings.js') }}"></script>{% endblock %}

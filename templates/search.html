@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Search | TEMP-U{% endblock %}
+{% block main %}
+<div class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+  <h1 class="text-2xl font-semibold tracking-tight">Search</h1>
+  <input id="page-search" type="search" value="{{ q }}" placeholder="Search the TEMP-U library…" autofocus
+         class="mt-4 h-11 w-full rounded-xl border bg-background px-4 text-sm outline-none focus-visible:ring-3 focus-visible:ring-control-focus">
+  <div id="page-results" class="mt-4 space-y-2"></div>
+</div>
+{% endblock %}
+{% block scripts %}<script>
+const inp=document.getElementById('page-search'), out=document.getElementById('page-results');
+let t;
+async function run(){
+  const q=inp.value.trim(); if(!q){out.innerHTML='';return;}
+  const r=await fetch('/api/search?q='+encodeURIComponent(q)); const d=await r.json();
+  out.innerHTML=d.items.map(i=>`<a href="${i.href}" class="block rounded-xl border bg-card p-4 shadow-sm hover:border-primary/40">
+    <p class="font-medium">${i.title}</p>
+    <p class="mt-1 text-xs text-muted-foreground">${i.breadcrumb.join(' · ')}</p>
+    ${i.snippet?`<p class="mt-2 text-sm text-muted-foreground">${i.snippet}</p>`:''}</a>`).join('')
+    || '<p class="text-sm text-muted-foreground">No results.</p>';
+}
+inp.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(run,200);});
+if(inp.value) run();
+</script>{% endblock %}

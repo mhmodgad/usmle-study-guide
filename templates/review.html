@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en" class="__variable_0cafb8 __variable_c5437d h-full antialiased {{ theme }}" data-mantine-color-scheme="{{ theme }}" style="color-scheme: {{ theme }};">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Study session | TEMP-U</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/overrides.css') }}">
+</head>
+<body class="min-h-full bg-background font-sans text-foreground">
+<div id="review-root" class="mx-auto flex min-h-screen w-full max-w-2xl flex-col px-4 py-5 sm:px-6"
+     data-scope="{{ scope }}" data-scope-id="{{ scope_id }}" data-back="{{ back_href or '/flashcards' }}">
+
+  <div class="flex items-center justify-between">
+    <a href="{{ back_href or '/flashcards' }}" class="inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-accent">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>Back</a>
+    <div class="flex items-center gap-2">
+      <button id="shuffle-btn" class="rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-accent" title="Shuffle">Shuffle</button>
+      <button id="fs-btn" class="rounded-lg border p-2 hover:bg-accent" title="Full screen" aria-label="Full screen">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="m21 3-7 7"></path><path d="m3 21 7-7"></path><path d="M9 21H3v-6"></path></svg>
+      </button>
+      <a href="{{ back_href or '/flashcards' }}" class="rounded-lg border p-2 hover:bg-accent" title="Exit" aria-label="Exit">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+      </a>
+    </div>
+  </div>
+
+  <div class="mt-5">
+    <p class="text-xs font-medium uppercase tracking-widest text-muted-foreground">Study session</p>
+    <h1 class="text-xl font-bold tracking-tight">{{ title }}</h1>
+    <p class="mt-1 text-sm text-muted-foreground"><span id="review-progress">0 of 0</span></p>
+    <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted"><div id="review-bar" class="h-full rounded-full bg-primary" style="width:0%"></div></div>
+  </div>
+
+  <div id="review-stage" class="mt-6 flex flex-1 flex-col justify-center">
+    <div id="card-mount"></div>
+    <div id="open-topic-wrap" class="mt-4 hidden justify-center">
+      <a id="open-topic" href="#" class="inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium hover:bg-accent">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"></path><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"></path></svg>Open topic</a>
+    </div>
+  </div>
+
+  <div id="review-controls" class="mt-6 pb-4">
+    <button id="reveal-btn" class="hidden w-full rounded-2xl bg-primary py-4 text-sm font-semibold text-primary-foreground hover:opacity-90">Reveal answer <span class="opacity-70">· Space</span></button>
+    <div id="rating-row" class="hidden grid-cols-2 gap-2 sm:grid-cols-4">
+      <button class="rate-btn flex flex-col items-center rounded-2xl border py-3 hover:bg-accent" data-rating="1">
+        <span class="text-xs opacity-60">1</span><span class="text-sm font-semibold text-tag-orange">Again</span><span class="rate-ivl mt-0.5 text-xs text-muted-foreground"></span></button>
+      <button class="rate-btn flex flex-col items-center rounded-2xl border py-3 hover:bg-accent" data-rating="2">
+        <span class="text-xs opacity-60">2</span><span class="text-sm font-semibold">Hard</span><span class="rate-ivl mt-0.5 text-xs text-muted-foreground"></span></button>
+      <button class="rate-btn flex flex-col items-center rounded-2xl border py-3 hover:bg-accent" data-rating="3">
+        <span class="text-xs opacity-60">3</span><span class="text-sm font-semibold text-status-success">Good</span><span class="rate-ivl mt-0.5 text-xs text-muted-foreground"></span></button>
+      <button class="rate-btn flex flex-col items-center rounded-2xl border py-3 hover:bg-accent" data-rating="4">
+        <span class="text-xs opacity-60">4</span><span class="text-sm font-semibold text-status-info">Easy</span><span class="rate-ivl mt-0.5 text-xs text-muted-foreground"></span></button>
+    </div>
+    <p class="mt-3 text-center text-xs text-muted-foreground">Space reveal · 1–4 rate · Esc exit</p>
+  </div>
+
+  <div id="review-done" class="hidden flex-1 flex-col items-center justify-center text-center">
+    <h2 class="text-2xl font-semibold">Session complete 🎉</h2>
+    <p class="mt-2 text-muted-foreground"><span id="done-known">0</span> known · <span id="done-missed">0</span> missed</p>
+    <div class="mt-6 flex gap-3">
+      <button id="restart-btn" class="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent">Study again</button>
+      <a href="{{ back_href or '/flashcards' }}" class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Done</a>
+    </div>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='js/review.js') }}"></script>
+</body>
+</html>

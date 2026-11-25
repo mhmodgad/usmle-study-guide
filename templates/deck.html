@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% set back_href = '/flashcards' %}
+{% block title %}{{ deck.name }} | TEMP-U{% endblock %}
+{% block main %}
+<div class="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ deck.name }}</h1>
+      <p class="mt-1 text-sm text-muted-foreground">{{ cards|length }} cards · New {{ new }} · Due {{ due }}</p>
+    </div>
+    <a href="/flashcards/review?scope=deck&id={{ deck.id }}&title={{ deck.name|urlencode }}" class="inline-flex h-9 items-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90">Study</a>
+  </div>
+
+  <div class="mt-6 space-y-3">
+    {% for c in cards %}
+    <div class="rounded-xl border bg-card p-4 shadow-sm">
+      <div class="flex items-start justify-between gap-3">
+        <p class="text-sm text-muted-foreground line-clamp-2">{{ c.front_text }}</p>
+        <button class="del-card shrink-0 text-muted-foreground hover:text-destructive" data-deck="{{ deck.id }}" data-card="{{ c.id }}" title="Remove">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+        </button>
+      </div>
+      {% if c.topic_title %}<p class="mt-1 text-xs text-muted-foreground">{{ c.topic_title }}</p>{% endif %}
+    </div>
+    {% else %}
+    <p class="text-sm text-muted-foreground">This deck is empty.</p>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/decks.js') }}"></script>{% endblock %}
