@@ -23,9 +23,19 @@ from .render import bn_render, card_render
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(HERE)
-DEFAULT_CONTENT = os.environ.get(
-    "TEMPU_CONTENT", os.path.join(os.path.dirname(PROJECT), "content")
-)
+
+
+def _resolve_content():
+    v = os.environ.get("TEMPU_CONTENT")
+    if v:
+        return v
+    in_project = os.path.join(PROJECT, "local", "content")
+    if os.path.isdir(in_project):
+        return in_project
+    return os.path.join(os.path.dirname(PROJECT), "content")
+
+
+DEFAULT_CONTENT = _resolve_content()
 
 LIBRARY_TITLES = {
     "8f7b96f9-7778-4908-af76-a8ad722cd68a": ("USMLE STEP 2CK", "step2ck", 0, 0),

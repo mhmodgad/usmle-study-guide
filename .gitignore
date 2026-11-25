@@ -5,3 +5,7 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 .DS_Store
+
+# In-project data (media/images/videos/fonts/icons + captured content) — not redistributed
+local/*
+!local/README.md

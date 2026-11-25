@@ -14,10 +14,19 @@ import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(HERE)
-DEFAULT_REPLICA_CSS = os.environ.get(
-    "TEMPU_REPLICA_CSS",
-    os.path.join(os.path.dirname(PROJECT), "tempu-replica", "css"),
-)
+
+
+def _resolve_css():
+    v = os.environ.get("TEMPU_REPLICA_CSS")
+    if v:
+        return v
+    in_project = os.path.join(PROJECT, "local", "css")
+    if os.path.isdir(in_project):
+        return in_project
+    return os.path.join(os.path.dirname(PROJECT), "tempu-replica", "css")
+
+
+DEFAULT_REPLICA_CSS = _resolve_css()
 OUT = os.path.join(PROJECT, "static", "css", "app.css")
 
 BASE = "reader-heartsounds.css"      # superset: shell + reader + cards

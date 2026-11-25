@@ -8,9 +8,23 @@ from . import service
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(HERE)
-# Where the captured fonts / icons / media / logos live (the replica's assets).
-DEFAULT_ASSETS = os.environ.get(
+
+
+def resolve_dir(env_key, in_project, legacy):
+    """Resolve a data directory: env var > in-project ./local/<x> > legacy ../ path."""
+    v = os.environ.get(env_key)
+    if v:
+        return v
+    if os.path.isdir(in_project):
+        return in_project
+    return legacy
+
+
+# Where the fonts / icons / media / logos live. Prefer an in-project, gitignored
+# ./local/assets folder (portable); fall back to the old replica assets dir.
+DEFAULT_ASSETS = resolve_dir(
     "TEMPU_ASSETS",
+    os.path.join(PROJECT, "local", "assets"),
     os.path.join(os.path.dirname(PROJECT), "tempu-replica", "assets"),
 )
 

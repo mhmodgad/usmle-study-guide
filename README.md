@@ -77,6 +77,11 @@ python -m tempu.app --port 5000
 
 `./setup.sh` does the same three steps inside a virtualenv.
 
+**Windows (no tools installed):** see [`WINDOWS.md`](WINDOWS.md) — double-click
+`setup-windows.bat` (installs Python, deps, builds the DB) then `run-windows.bat`.
+On Windows, put your data in the in-project `local\` folder (`local\content`,
+`local\assets`); it's gitignored.
+
 Rebuild the database any time with `python -m tempu.loader`. By default it
 **preserves your study state** (progress, notes, decks, reviews) and only
 rebuilds the content tables. Flags:
