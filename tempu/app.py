@@ -69,7 +69,7 @@ def create_app(db_path=None, assets_dir=None):
             return ""
         try:
             d = _dt.datetime.fromisoformat(str(iso).replace("Z", "").split("+")[0])
-            return d.strftime("%b %-d")
+            return f"{d:%b} {d.day}"
         except (ValueError, TypeError):
             return str(iso)[:10]
 
@@ -92,9 +92,9 @@ def create_app(db_path=None, assets_dir=None):
     # ---- serve captured assets (fonts, icons, media, logos) ----
     @app.route("/assets/<path:relpath>")
     def assets(relpath):
-        base = app.config["ASSETS_DIR"]
+        base = os.path.normpath(app.config["ASSETS_DIR"])
         full = os.path.normpath(os.path.join(base, relpath))
-        if not full.startswith(os.path.normpath(base)):
+        if not full.startswith(base + os.sep):
             abort(404)
         directory, fname = os.path.split(full)
         if not os.path.isfile(full):
@@ -104,9 +104,9 @@ def create_app(db_path=None, assets_dir=None):
     # callout/quote icons referenced by rendered content as /editor/quoteIcons/<x>.webp
     @app.route("/editor/<path:relpath>")
     def editor_assets(relpath):
-        base = os.path.join(app.config["ASSETS_DIR"], "editor")
+        base = os.path.normpath(os.path.join(app.config["ASSETS_DIR"], "editor"))
         full = os.path.normpath(os.path.join(base, relpath))
-        if not full.startswith(os.path.normpath(base)) or not os.path.isfile(full):
+        if not full.startswith(base + os.sep) or not os.path.isfile(full):
             abort(404)
         directory, fname = os.path.split(full)
         return send_from_directory(directory, fname, max_age=86400)

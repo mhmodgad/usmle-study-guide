@@ -37,7 +37,7 @@ def dashboard():
     for i in range(6, -1, -1):
         d = today - datetime.timedelta(days=i)
         units = round((logmap.get(d.isoformat(), 0) or 0) / unit_sec, 1)
-        week.append({"label": d.strftime("%a %-d %b"), "units": units,
+        week.append({"label": f"{d:%a} {d.day} {d:%b}", "units": units,
                      "future": d > today, "today": d == today})
     # quick access = pinned chapters
     pinned = []
@@ -249,8 +249,9 @@ def deck(deck_id):
         "JOIN cards c ON c.id=dc.card_id LEFT JOIN topics t ON t.id=c.topic_id "
         "WHERE dc.deck_id=? ORDER BY dc.added_at", (deck_id,)).fetchall()
     views = [S.render_card(c) for c in cards]
-    return render_template("deck.html", active="flashcards", deck=d, cards=views,
-                           **_deck_stats(deck_id))
+    stats = _deck_stats(deck_id)
+    stats.pop("cards", None)  # the template's `cards` is the card list itself
+    return render_template("deck.html", active="flashcards", deck=d, cards=views, **stats)
 
 
 @bp.route("/flashcards/stats")
