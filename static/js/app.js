@@ -44,12 +44,13 @@
   const mqDesktop = window.matchMedia('(min-width: 768px)');
   function setSidebar(open) {
     root.classList.toggle('sb-open', open);
-    try { localStorage.setItem('tempu-sidebar', open ? '1' : '0'); } catch (e) {}
+    try { localStorage.setItem(window.__sbKey || 'tempu-sidebar', open ? '1' : '0'); } catch (e) {}
   }
   // match the live app: expanded by default on desktop, unless the user collapsed it;
   // mobile always starts closed (overlay)
   try {
-    const sb = localStorage.getItem('tempu-sidebar');
+    let sb = localStorage.getItem(window.__sbKey || 'tempu-sidebar');
+    if (sb === null && root.classList.contains('page-reader')) sb = '0';   // reading pages start full width
     if (mqDesktop.matches && sb !== '0') root.classList.add('sb-open');
     else if (!mqDesktop.matches) root.classList.remove('sb-open');
   } catch (e) {}

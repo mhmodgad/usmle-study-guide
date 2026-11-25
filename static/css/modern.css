@@ -277,3 +277,43 @@ html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[dat
 html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="red"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="red"], html.look-modern .topic-article .bn-editor [data-text-color="red"] { color: var(--notion-color-red) !important; }
 html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="red"] { background-color: var(--notion-highlight-red) !important; color: inherit; }
 html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="red"]), html.look-modern .topic-article .bn-editor [data-background-color="red"] { background-color: var(--notion-color-red-bg) !important; color: var(--doc-ink); }
+
+/* =========================================================================
+   Reader layout — same as app.tempusmle.com, for BOTH looks:
+   sidebar hidden by default, a full-bleed document sheet under the header,
+   content up to 1300px, flat topics with a header strip (no boxed cards).
+   ========================================================================= */
+html.page-reader { --reader-sheet: #191919; --reader-topic-head: #241f1e; }
+html.page-reader:not(.dark) { --reader-sheet: #ffffff; --reader-topic-head: oklch(0.955 0.012 25); }
+@media (min-width: 768px) {
+  html.page-reader:not(.sb-open) [data-app-sidebar] { display: none !important; }
+  html.page-reader:not(.sb-open) [data-app-content] { padding-left: 0 !important; }
+}
+html.page-reader [data-app-main] { padding: 0 !important; display: flex; flex-direction: column; }
+html.page-reader .reader-root {
+  max-width: none !important; width: 100% !important; margin: 0 !important; flex: 1;
+  padding: 2rem clamp(1rem, 4.5vw, 4.5rem) 4rem !important;
+  background: var(--reader-sheet);
+}
+html.page-reader .reader-root > *:not(#resume-pill):not(#read-progress) { max-width: 1300px; margin-left: auto; margin-right: auto; }
+html.page-reader .reader-root .section-title { font-size: clamp(1.75rem, 2.6vw, 2.5rem); line-height: 1.2; font-weight: 700; }
+html.page-reader .reader-root .reader-topics > * + * { margin-top: 26px; }
+html.page-reader .reader-root .topic-article {
+  border: 0 !important; border-radius: 0 !important; background: transparent !important; box-shadow: none !important; overflow: visible;
+}
+html.page-reader .reader-root .topic-article > div:first-child {
+  background: var(--reader-topic-head) !important; border-radius: 0; padding: .55rem .75rem .55rem .5rem !important;
+}
+html.page-reader .reader-root .topic-article > div:first-child::before { display: none; }
+html.page-reader .reader-root .topic-article h2 { font-size: 1.5rem; font-weight: 600; }
+html.page-reader .reader-root .topic-body { border-top: 0 !important; padding: 0 0 .5rem !important; }
+html.page-reader .reader-root .topic-body .mantine-editor-container { margin-top: 1rem; }
+html.page-reader .reader-root .bn-editor { background: transparent !important; padding-inline: 0 !important; border-radius: 0; }
+html.page-reader .reader-root .topic-article.is-editing { outline-offset: 6px; }
+/* split view: two sheets side by side */
+html.page-reader #split-wrap { gap: 0; }
+html.page-reader #split-wrap > .reader-root { padding: 1.5rem 1.5rem 3rem !important; }
+html.page-reader #split-pane { border-radius: 0; border-width: 0 0 0 1px; top: 3.5rem; height: calc(100dvh - 3.5rem); }
+html.page-reader.split-open [data-app-main] { padding: 0 !important; }
+html.tempu-embed.page-reader .reader-root { padding: 1rem 1.25rem 3rem !important; }
+@media (max-width: 640px) { html.page-reader .reader-root { padding: 1.25rem 1rem 3rem !important; } }

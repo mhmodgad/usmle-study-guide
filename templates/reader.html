@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set reader_page = true %}
 {% set back_href = '/libraries/' ~ library.id ~ '/chapters/' ~ chapter.id %}
 {% set cs = 'dark' if theme == 'dark' else 'light' %}
 {% block title %}{{ section.title }} | TEMP-U{% endblock %}
@@ -34,7 +35,7 @@
 
   <div class="mt-5 flex flex-wrap items-center justify-between gap-3">
     <div class="flex min-w-0 items-center gap-2">
-      <h1 id="section-title" class="text-2xl font-bold tracking-tight">{{ section.title }}</h1>
+      <h1 id="section-title" class="section-title text-2xl font-bold tracking-tight">{{ section.title }}</h1>
       <button id="sec-bookmark" class="bm-btn text-xl {% if section_state.bookmarked %}is-on{% endif %}" data-section="{{ section.id }}" title="Bookmark this section">★</button>
     </div>
     <div class="flex items-center gap-2">
@@ -73,7 +74,7 @@
   </div>
   {% endif %}
 
-  <div class="mt-8 space-y-6">
+  <div class="reader-topics mt-8 space-y-6">
     {% for tv in topics %}
     {% set t = tv.row %}
     <article id="topic-{{ t.id }}" class="topic-article scroll-mt-20 rounded-2xl border bg-card/40" data-topic-id="{{ t.id }}" data-doc-version="{{ t.document_version }}">

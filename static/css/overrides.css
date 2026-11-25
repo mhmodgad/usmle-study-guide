@@ -513,3 +513,20 @@ html.edit-mode #section-title:hover { background: color-mix(in oklab, var(--prim
 .ce-cr-bar .ce-cr-ok { background: var(--primary); color: var(--primary-foreground); font-weight: 600; }
 html.editing-content .topic-article.is-editing .bn-editor [data-content-type=image]:hover img { outline: 2px solid color-mix(in oklab, var(--primary) 45%, transparent); outline-offset: 2px; }
 #edit-mode-bar b { white-space: nowrap; }
+
+/* callout icons: shown only inside callout (quote) boxes, like the live app */
+.bn-editor .callout-icon-image { display: none; }
+.bn-editor .bn-block-content[data-content-type=quote] { position: relative; }
+.bn-editor .bn-block-content[data-content-type=quote] .callout-icon-image { display: inline-block; }
+.bn-editor .bn-block-content[data-content-type=quote]:has(.callout-icon-marker) { padding: 20.5px 13px 21px 45px; }
+
+/* phones: the topic title gets its own line, actions wrap under it */
+@media (max-width: 640px) {
+  .topic-article > div:first-child { flex-wrap: wrap; row-gap: .25rem; }
+  .topic-article > div:first-child > .topic-collapse { flex-basis: 100%; }
+  .topic-article > div:first-child > .topic-collapse .topic-title { white-space: normal; }
+  .topic-article > div:first-child > div:last-child { margin-left: auto; }
+}
+/* callout text: full colour, no inner rule (live app) */
+.bn-editor .bn-block-content[data-content-type=quote] blockquote { border: 0 !important; padding: 0 !important; margin: 0 !important; color: inherit !important; font-style: normal; }
+html.dark .bn-editor .bn-block-content[data-content-type=quote] { color: #f0efed; }
