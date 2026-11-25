@@ -161,6 +161,10 @@ def progress_open():
         g.db.execute(
             "UPDATE progress SET last_opened_at=? WHERE topic_id IN "
             "(SELECT id FROM topics WHERE section_id=?)", (_now(), sid))
+        g.db.execute(
+            "INSERT INTO section_state(section_id,last_opened_at,open_count,updated_at) VALUES(?,?,1,?) "
+            "ON CONFLICT(section_id) DO UPDATE SET last_opened_at=excluded.last_opened_at, "
+            "open_count=open_count+1, updated_at=excluded.updated_at", (sid, _now(), _now()))
         g.db.commit()
     return jsonify({"ok": True})
 
@@ -482,3 +486,312 @@ def _search_item(topic_id, title, section_id, chapter_id, library_id, snip):
         "breadcrumb": ["USMLE STEP 2CK", chap["title"] if chap else ""],
         "href": f"/libraries/{library_id}/chapters/{chapter_id}/sections/{section_id}#topic-{topic_id}",
     }
+
+
+# ------------------------------------------------------------- cross references
+@bp.route("/xref/<topic_id>")
+def xref_lookup(topic_id):
+    hit = S.resolve_topic(topic_id)
+    if not hit:
+        return jsonify({"found": False, "topic_id": topic_id})
+    hit["found"] = True
+    hit["url"] = "/libraries/%s/chapters/%s/sections/%s" % (
+        hit["library_id"], hit["chapter_id"], hit["section_id"])
+    return jsonify(hit)
+
+
+# ------------------------------------------------------------- content editor
+# Edits live in topic_edits (user state), never in the content tables, so a
+# content rebuild (python -m tempu.loader) keeps them.
+import os as _os
+from flask import current_app as _app
+from .. import sanitize as _san
+
+_IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "avif", "bmp"}
+
+
+def _topic_or_404(topic_id):
+    t = g.db.execute("SELECT * FROM topics WHERE id=?", (topic_id,)).fetchone()
+    if not t:
+        abort(404)
+    return t
+
+
+def _reindex_topic(topic_id, title, plain):
+    try:
+        r = g.db.execute(
+            "SELECT t.section_id, s.chapter_id, c.library_id FROM topics t "
+            "JOIN sections s ON s.id=t.section_id JOIN chapters c ON c.id=s.chapter_id "
+            "WHERE t.id=?", (topic_id,)).fetchone()
+        if not r:
+            return
+        g.db.execute("DELETE FROM search_fts WHERE ref=? AND kind='topic'", (topic_id,))
+        g.db.execute(
+            "INSERT INTO search_fts(ref,kind,title,body,library_id,chapter_id,section_id) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (topic_id, "topic", title or "", plain or "", r["library_id"], r["chapter_id"], r["section_id"]))
+    except Exception:  # noqa: BLE001 - FTS missing: search falls back to LIKE on topics
+        pass
+
+
+@bp.route("/topics/<topic_id>/content", methods=["GET"])
+def topic_content_get(topic_id):
+    t = _topic_or_404(topic_id)
+    e = g.db.execute("SELECT * FROM topic_edits WHERE topic_id=?", (topic_id,)).fetchone()
+    return jsonify({
+        "topic_id": topic_id,
+        "html": e["html"] if e else t["document_html"],
+        "title": (e["title"] if e and e["title"] else t["title"]),
+        "edited": bool(e),
+        "edited_at": e["updated_at"] if e else None,
+        "history": g.db.execute("SELECT COUNT(*) FROM topic_edit_history WHERE topic_id=?",
+                                (topic_id,)).fetchone()[0],
+    })
+
+
+@bp.route("/topics/<topic_id>/content", methods=["PUT", "POST"])
+def topic_content_save(topic_id):
+    t = _topic_or_404(topic_id)
+    d = request.get_json(force=True) or {}
+    html = _san.clean_html(d.get("html") or "")
+    title = (d.get("title") or "").strip() or None
+    if title == t["title"]:
+        title = None
+    cur = g.db.execute("SELECT * FROM topic_edits WHERE topic_id=?", (topic_id,)).fetchone()
+    now = _now()
+    # keep a restorable copy of what was there before this editing session
+    if d.get("checkpoint"):
+        g.db.execute("INSERT INTO topic_edit_history(topic_id,html,title,saved_at) VALUES(?,?,?,?)",
+                     (topic_id, cur["html"] if cur else t["document_html"],
+                      cur["title"] if cur else None, now))
+        g.db.execute(
+            "DELETE FROM topic_edit_history WHERE topic_id=? AND id NOT IN "
+            "(SELECT id FROM topic_edit_history WHERE topic_id=? ORDER BY id DESC LIMIT 30)",
+            (topic_id, topic_id))
+    plain = _san.plain_text(html)
+    g.db.execute(
+        "INSERT INTO topic_edits(topic_id,html,title,plain_text,base_version,updated_at) "
+        "VALUES(?,?,?,?,?,?) ON CONFLICT(topic_id) DO UPDATE SET "
+        "html=excluded.html, title=excluded.title, plain_text=excluded.plain_text, "
+        "updated_at=excluded.updated_at",
+        (topic_id, html, title, plain, t["document_version"], now))
+    _reindex_topic(topic_id, title or t["title"], plain)
+    g.db.commit()
+    return jsonify({"ok": True, "updated_at": now})
+
+
+@bp.route("/topics/<topic_id>/content", methods=["DELETE"])
+def topic_content_restore(topic_id):
+    """Drop the user's edits and go back to the original document."""
+    t = _topic_or_404(topic_id)
+    cur = g.db.execute("SELECT * FROM topic_edits WHERE topic_id=?", (topic_id,)).fetchone()
+    if cur:
+        g.db.execute("INSERT INTO topic_edit_history(topic_id,html,title,saved_at) VALUES(?,?,?,?)",
+                     (topic_id, cur["html"], cur["title"], _now()))
+        g.db.execute("DELETE FROM topic_edits WHERE topic_id=?", (topic_id,))
+        _reindex_topic(topic_id, t["title"], t["plain_text"])
+        g.db.commit()
+    return jsonify({"ok": True})
+
+
+@bp.route("/topics/<topic_id>/history", methods=["GET"])
+def topic_history(topic_id):
+    rows = g.db.execute("SELECT id, title, saved_at, length(html) size FROM topic_edit_history "
+                        "WHERE topic_id=? ORDER BY id DESC", (topic_id,)).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@bp.route("/topics/<topic_id>/history/<int:hid>/restore", methods=["POST"])
+def topic_history_restore(topic_id, hid):
+    t = _topic_or_404(topic_id)
+    h = g.db.execute("SELECT * FROM topic_edit_history WHERE id=? AND topic_id=?",
+                     (hid, topic_id)).fetchone()
+    if not h:
+        abort(404)
+    plain = _san.plain_text(h["html"])
+    g.db.execute(
+        "INSERT INTO topic_edits(topic_id,html,title,plain_text,base_version,updated_at) "
+        "VALUES(?,?,?,?,?,?) ON CONFLICT(topic_id) DO UPDATE SET html=excluded.html, "
+        "title=excluded.title, plain_text=excluded.plain_text, updated_at=excluded.updated_at",
+        (topic_id, h["html"], h["title"], plain, t["document_version"], _now()))
+    _reindex_topic(topic_id, h["title"] or t["title"], plain)
+    g.db.commit()
+    return jsonify({"ok": True})
+
+
+@bp.route("/uploads", methods=["POST"])
+def upload_image():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "no file"}), 400
+    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+    if ext not in _IMG_EXT:
+        mt = (f.mimetype or "").split("/")[-1].lower()
+        ext = {"jpeg": "jpg"}.get(mt, mt)
+        if ext not in _IMG_EXT:
+            return jsonify({"error": "only image files can be added"}), 400
+    folder = _app.config["UPLOADS_DIR"]
+    _os.makedirs(folder, exist_ok=True)
+    name = f"{_uid()}.{ext}"
+    f.save(_os.path.join(folder, name))
+    return jsonify({"url": f"/uploads/{name}", "name": f.filename})
+
+
+# ------------------------------------------------------------- section reading state
+@bp.route("/sections/<section_id>/state", methods=["GET", "POST"])
+def section_state(section_id):
+    if request.method == "GET":
+        r = g.db.execute("SELECT * FROM section_state WHERE section_id=?", (section_id,)).fetchone()
+        return jsonify(dict(r) if r else {"section_id": section_id})
+    d = request.get_json(force=True) or {}
+    cur = g.db.execute("SELECT * FROM section_state WHERE section_id=?", (section_id,)).fetchone()
+    if not cur:
+        g.db.execute("INSERT INTO section_state(section_id,updated_at) VALUES(?,?)", (section_id, _now()))
+    sets, vals = [], []
+    if "last_topic_id" in d:
+        sets.append("last_topic_id=?"); vals.append(d["last_topic_id"])
+    if "scroll_ratio" in d:
+        try:
+            sets.append("scroll_ratio=?"); vals.append(max(0.0, min(1.0, float(d["scroll_ratio"]))))
+        except (TypeError, ValueError):
+            sets.pop()
+    if "bookmarked" in d:
+        sets.append("bookmarked=?"); vals.append(1 if d["bookmarked"] else 0)
+    if sets:
+        sets.append("updated_at=?"); vals.append(_now())
+        g.db.execute(f"UPDATE section_state SET {', '.join(sets)} WHERE section_id=?", (*vals, section_id))
+    g.db.commit()
+    return jsonify({"ok": True})
+
+
+# ------------------------------------------------------------- structure editing
+from .. import structure as _st  # noqa: E402
+
+
+def _kind(kind):
+    if kind not in _st.KINDS:
+        abort(404)
+    return kind
+
+
+@bp.route("/structure/<kind>", methods=["POST"])
+def structure_create(kind):
+    _kind(kind)
+    if kind == "library":
+        return jsonify({"error": "libraries can't be created here"}), 400
+    d = request.get_json(force=True) or {}
+    parent = d.get("parent_id")
+    if not parent:
+        return jsonify({"error": "parent_id required"}), 400
+    new_id = _st.create(g.db, kind, parent, d.get("title"), d.get("after_id"), d.get("icon_path"))
+    g.db.commit()
+    out = {"ok": True, "id": new_id}
+    if kind == "section":
+        ch = g.db.execute("SELECT library_id FROM chapters WHERE id=?", (parent,)).fetchone()
+        if ch:
+            out["url"] = "/libraries/%s/chapters/%s/sections/%s" % (ch["library_id"], parent, new_id)
+    if kind == "topic":
+        out["url"] = "/sections/%s#topic-%s" % (parent, new_id)
+    return jsonify(out)
+
+
+@bp.route("/structure/<kind>/<item_id>", methods=["PATCH"])
+def structure_update(kind, item_id):
+    _kind(kind)
+    d = request.get_json(force=True) or {}
+    if "title" in d and not _st.rename(g.db, kind, item_id, d["title"]):
+        return jsonify({"error": "not found or empty title"}), 400
+    if "icon_path" in d:
+        _st.set_icon(g.db, kind, item_id, d["icon_path"] or None)
+    if kind != "library" and ("parent_id" in d or "order" in d or "index" in d):
+        t, pcol = _st.KINDS[kind]
+        row = g.db.execute(f"SELECT {pcol} p FROM {t} WHERE id=?", (item_id,)).fetchone()
+        if not row:
+            abort(404)
+        _st.move(g.db, kind, item_id, d.get("parent_id") or row["p"], d.get("order"), d.get("index"))
+    g.db.commit()
+    return jsonify({"ok": True})
+
+
+@bp.route("/structure/<kind>/<item_id>", methods=["DELETE"])
+def structure_delete(kind, item_id):
+    _kind(kind)
+    if kind == "library":
+        return jsonify({"error": "libraries can't be deleted"}), 400
+    ok = _st.delete(g.db, kind, item_id)
+    g.db.commit()
+    return jsonify({"ok": ok})
+
+
+@bp.route("/structure/trash", methods=["GET"])
+def structure_trash():
+    return jsonify(_st.trash(g.db))
+
+
+@bp.route("/structure/<kind>/<item_id>/restore", methods=["POST"])
+def structure_restore(kind, item_id):
+    _kind(kind)
+    ok = _st.restore(g.db, kind, item_id)
+    g.db.commit()
+    return jsonify({"ok": ok})
+
+
+@bp.route("/structure/<kind>/<item_id>/purge", methods=["POST"])
+def structure_purge(kind, item_id):
+    _kind(kind)
+    ok = _st.purge(g.db, kind, item_id)
+    g.db.commit()
+    return jsonify({"ok": ok})
+
+
+@bp.route("/structure/tree/<library_id>", methods=["GET"])
+def structure_tree(library_id):
+    """Whole library as a tree (chapters > sections > topics) for the organizer."""
+    chs = g.db.execute("SELECT id,title,icon_path FROM chapters WHERE library_id=? "
+                       "ORDER BY sort_order, rowid", (library_id,)).fetchall()
+    secs = g.db.execute("SELECT s.id,s.title,s.icon_path,s.chapter_id FROM sections s JOIN chapters c "
+                        "ON c.id=s.chapter_id WHERE c.library_id=? ORDER BY s.sort_order, s.rowid",
+                        (library_id,)).fetchall()
+    tops = g.db.execute("SELECT t.id, COALESCE(e.title,t.title) title, t.section_id FROM topics t "
+                        "JOIN sections s ON s.id=t.section_id JOIN chapters c ON c.id=s.chapter_id "
+                        "LEFT JOIN topic_edits e ON e.topic_id=t.id "
+                        "WHERE c.library_id=? ORDER BY t.sort_order, t.rowid", (library_id,)).fetchall()
+    created = {(r["kind"], r["id"]) for r in g.db.execute(
+        "SELECT kind,id FROM struct_overrides WHERE created=1 AND deleted=0")}
+    by_sec, by_ch = {}, {}
+    for t in tops:
+        by_sec.setdefault(t["section_id"], []).append(
+            {"id": t["id"], "title": t["title"], "mine": ("topic", t["id"]) in created})
+    for s_ in secs:
+        by_ch.setdefault(s_["chapter_id"], []).append(
+            {"id": s_["id"], "title": s_["title"], "icon": S.icon_web_path(s_["icon_path"]),
+             "mine": ("section", s_["id"]) in created, "topics": by_sec.get(s_["id"], [])})
+    return jsonify([{"id": c["id"], "title": c["title"], "icon": S.icon_web_path(c["icon_path"]),
+                     "mine": ("chapter", c["id"]) in created, "sections": by_ch.get(c["id"], [])}
+                    for c in chs])
+
+
+@bp.route("/structure/icons", methods=["GET"])
+def structure_icons():
+    """Every icon the user can pick: the app's medical icon set, icons already
+    used by chapters/sections, and images uploaded as icons."""
+    out, seen = [], set()
+
+    def add(url, group):
+        if url and url not in seen:
+            seen.add(url)
+            out.append({"url": url, "group": group, "name": url.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", " ").replace("_", " ")})
+    base = _app.config["ASSETS_DIR"]
+    for sub in ("icons/medical", "icons"):
+        d = _os.path.join(base, sub)
+        if _os.path.isdir(d):
+            for fn in sorted(_os.listdir(d)):
+                if fn.lower().endswith((".webp", ".png", ".svg", ".jpg", ".jpeg", ".gif")):
+                    add(f"/assets/{sub}/{fn}", "Library icons")
+    for r in g.db.execute("SELECT icon_path FROM chapters UNION SELECT icon_path FROM sections"):
+        add(S.icon_web_path(r[0]), "In use")
+    up = _app.config["UPLOADS_DIR"]
+    for r in g.db.execute("SELECT DISTINCT icon_path FROM struct_overrides WHERE icon_path LIKE '/uploads/%'"):
+        if _os.path.isfile(_os.path.join(up, r[0].rsplit("/", 1)[-1])):
+            add(r[0], "Your uploads")
+    return jsonify(out)

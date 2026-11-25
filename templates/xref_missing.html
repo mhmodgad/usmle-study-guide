@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Not available offline | TEMP-U{% endblock %}
+{% block main %}
+<div class="mx-auto w-full max-w-2xl px-4 py-16 text-center sm:px-6">
+  <div class="mx-auto flex size-14 items-center justify-center rounded-full bg-muted">
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"></path><path d="M15 7h2a5 5 0 1 1 0 10h-2"></path><line x1="2" x2="22" y1="2" y2="22"></line></svg>
+  </div>
+  <h1 class="mt-4 text-xl font-semibold tracking-tight">This linked topic isn't in your offline library yet</h1>
+  <p class="mt-2 text-sm text-muted-foreground">Topic <code>{{ topic_id }}</code> hasn't been downloaded to the local app.</p>
+</div>
+{% endblock %}

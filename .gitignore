@@ -8,6 +8,11 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 
+# images you add with the in-app content editor
+data/uploads/
+# small browser-tab icon generated from your logo at runtime
+data/app-icon-*.png
+
 # Heavy / copyrighted data that should NOT be in git:
 #   - topic images & videos
 #   - the educational content the loader reads

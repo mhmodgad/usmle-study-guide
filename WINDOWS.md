@@ -41,6 +41,10 @@ You need **two** things from your current machine:
 > `setup-windows.bat` detects a non-Windows `.venv` and rebuilds it, and stale
 > `.pyc` files are ignored. You do **not** have to delete anything before
 > copying.
+>
+> The hidden `.git` folder may come along or not. With it, the folder keeps
+> its history; without it, `run-windows.bat` links the folder to the repo the
+> first time it runs, without changing any file.
 
 ---
 
@@ -75,19 +79,29 @@ the app finds it automatically. (Advanced: you can override with the
 2. **Add your data**: put `content` into `local\content` and `assets` into
    `local\assets`. (Or copy your prebuilt `data\tempu.db` into `data\`.)
 3. **Double-click `setup-windows.bat`.** It will:
-   - install Python 3.12 if it isn't already there,
+   - install Git (for the launch-time updates) and Python 3.12 if not already there,
    - create a private virtual environment (`.venv`),
    - install the one dependency (Flask),
    - build the database from `local\content` (unless `data\tempu.db` already exists).
    The first run takes a few minutes (Python download). If it tells you Python
    was just installed, **close the window, open the folder again, and
    double-click `setup-windows.bat` once more.**
-4. **Double-click `run-windows.bat`.** Your browser opens at
-   **http://127.0.0.1:5000/** and the app is running. Leave that black window
-   open while you use the app; press **Ctrl+C** (or close it) to stop.
+4. **Double-click `run-windows.bat`.** On every launch it first checks the
+   public GitHub repo for updates (a public repo needs **no GitHub account,
+   login or SSH key**; if you're offline it just starts the current version).
+   It updates **only when the repo is ahead** of your copy. If your copy has
+   changes of its own that the repo doesn't have, nothing is touched and the
+   app simply starts. Then your browser opens at
+   **http://127.0.0.1:5000/**. Leave that black window open while you use
+   the app; press **Ctrl+C** (or close it) to stop.
 
-That's it — nothing is installed system-wide except Python; everything else
-lives inside the project folder.
+That's it — nothing is installed system-wide except Python (and Git, which
+enables the update-on-launch); everything else lives inside the project
+folder. Your data is never overwritten by an update: `data\tempu.db`,
+`local\content`, and `local\assets` are all outside the synced files.
+
+> Don't want the update check? Start the app with
+> `.\.venv\Scripts\python.exe -m tempu.launch --port 5000 --no-update`.
 
 ---
 
@@ -113,7 +127,10 @@ lives inside the project folder.
 |---|---|
 | "Python is not recognized" after install | Close the window, open a new one, run `setup-windows.bat` again. Windows only picks up the new PATH in fresh windows. |
 | `setup-windows.bat` closes instantly | Run it from PowerShell to see the error: `powershell -ExecutionPolicy Bypass -File setup-windows.ps1` |
-| Port 5000 is busy | Start on another port: `.\.venv\Scripts\python.exe -m tempu.app --port 5050` then open http://127.0.0.1:5050/ |
+| Port 5000 is busy | Is the app already running (check the taskbar)? Otherwise start on another port: `.\.venv\Scripts\python.exe -m tempu.launch --port 5050` then open http://127.0.0.1:5050/ |
+| "local edits to … are in the way" on launch | Someone changed those files in this folder. The update was skipped and the app still works. To take the update, undo those edits (or commit them), then launch again. |
+| "this copy has N commit(s) the repo doesn't" | This folder was changed with git. Its version is kept as it is; push those commits to GitHub to make them the public version. |
+| "could not reach the repo" | You're probably offline. The app still starts with the installed version; it updates next time you're online. |
 | Images/videos don't show | They're missing from `local\assets`. Check `local\assets\media\<topicId>\`. |
 | No database / blank library | You have neither `data\tempu.db` nor `local\content`. Add one and re-run setup. |
 | Windows SmartScreen warns on the Python installer | It's the official installer from python.org; choose "More info → Run anyway", or pre-install Python yourself from the Microsoft Store. |
@@ -123,6 +140,8 @@ lives inside the project folder.
 ## Requirements summary
 
 - **Windows 10 or 11.**
-- An internet connection **for the first setup only** (to download Python).
+- An internet connection **to set up** (to download Python and Git) and
+  whenever you want the app to check for updates. Offline, the app simply
+  starts with the installed version.
 - ~Disk space for your `local\assets` media (the only large part).
 - Everything else is handled by `setup-windows.bat`.

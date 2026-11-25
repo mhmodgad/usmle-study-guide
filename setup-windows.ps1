@@ -1,15 +1,43 @@
 # Prepares a fresh Windows machine (no prerequisites) to run the USMLE Study Guide app.
-# Installs Python if needed, creates a virtual environment, installs dependencies,
-# and builds the database. Run it once via setup-windows.bat (double-click).
+# Installs Git and Python if needed, creates a virtual environment, installs
+# dependencies, and builds the database. Run it once via setup-windows.bat (double-click).
+# (Code updates happen automatically on every launch - see run-windows.bat.)
 
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
 function Have($cmd) { return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
+function Refresh-Path {
+    $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+                [Environment]::GetEnvironmentVariable("Path","User")
+}
 
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "  USMLE Study Guide - Windows setup" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
+
+# --- 0. Ensure Git is installed ----------------------------------------------
+if (-not (Have "git")) {
+    Write-Host "`nGit is not installed. Installing Git..." -ForegroundColor Yellow
+    if (Have "winget") {
+        winget install -e --id Git.Git `
+            --accept-source-agreements --accept-package-agreements
+    } else {
+        $url = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/Git-2.47.1-64-bit.exe"
+        $out = Join-Path $env:TEMP "git-installer.exe"
+        Write-Host "Downloading Git ..."
+        Invoke-WebRequest -Uri $url -OutFile $out
+        Write-Host "Installing Git..."
+        Start-Process -FilePath $out -Wait -ArgumentList "/VERYSILENT /NORESTART"
+    }
+    Refresh-Path
+    $gitCmd = "C:\Program Files\Git\cmd"
+    if (-not (Have "git") -and (Test-Path $gitCmd)) { $env:Path += ";$gitCmd" }
+    if (-not (Have "git")) {
+        Write-Host "Git was installed but is not on PATH yet. Close this window and run setup again." -ForegroundColor Yellow
+    }
+}
+if (Have "git") { Write-Host "Git found: $(git --version)" -ForegroundColor Green }
 
 # --- 1. Ensure Python is installed -------------------------------------------
 $py = $null
@@ -31,8 +59,7 @@ if (-not $py) {
             "/quiet InstallAllUsers=1 PrependPath=1 Include_launcher=1"
     }
     # refresh PATH in this session
-    $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
-                [Environment]::GetEnvironmentVariable("Path","User")
+    Refresh-Path
     if (Have "py")     { $py = "py -3" }
     elseif (Have "python") { $py = "python" }
     if (-not $py) {

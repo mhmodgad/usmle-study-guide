@@ -5,24 +5,21 @@
    popovers). It never changes content order or structure.
    ========================================================================= */
 
-/* ---------- reading column & typography ---------- */
-html.look-modern .bn-editor {
-  font-size: 1.0625rem;         /* ~17px, comfortable reading */
-  line-height: 1.55;            /* tighter, balanced spacing */
-  letter-spacing: 0.001em;
+/* ---------- reading column & typography (matches app.tempusmle.com) ---------- */
+/* live app: 15–18px text, line-height 1.5, 3px block padding, no extra margins */
+html.look-modern .topic-article .bn-editor {
+  font-size: var(--reader-text-size, 16px);
+  line-height: 1.5;
+  letter-spacing: normal;
 }
+html.look-modern .bn-editor .bn-inline-content,
 html.look-modern .bn-editor p,
-html.look-modern .bn-editor li { margin-block: 0.28rem; }
-html.look-modern .bn-editor h1,
-html.look-modern .bn-editor h2,
-html.look-modern .bn-editor h3 {
-  letter-spacing: -0.01em;
-  line-height: 1.3;
-  margin-top: 1.4em;
-  margin-bottom: 0.5em;
-}
+html.look-modern .bn-editor li { margin-block: 0 !important; }
+html.look-modern .bn-editor .bn-block-content { margin-block: 0 !important; padding-block: 3px; }
+html.look-modern .bn-editor .bn-block-outer { margin-block: 0 !important; }
+html.look-modern .bn-editor [data-content-type=heading] { padding-block: 2px; line-height: 1.3; }
 html.look-modern .bn-editor ul,
-html.look-modern .bn-editor ol { margin-block: 0.4rem; }
+html.look-modern .bn-editor ol { margin-block: 0; }
 html.look-modern .bn-editor a { text-underline-offset: 3px; }
 
 /* ---------- images: rounded, framed, centered, zoomable ---------- */
@@ -173,110 +170,110 @@ html.look-modern #ann-panel .ann-item {
   border-color: color-mix(in oklab, var(--border) 60%, transparent);
 }
 
+
 /* =========================================================================
-   Modern: refined content colour system (presentation only — same text/order)
-   The source document colours section headings with data-background-color and
-   emphasises text with data-style-type="backgroundColor"/"textColor". Classic
-   fills these as flat blocks (vivid bars in dark mode). Modern turns each into
-   a calm, accessible accent: a tinted panel + a coloured left rail + readable
-   coloured heading text, so sections read as a clean, scannable hierarchy.
+   Modern: live-app layout + colours
+   - Sections/topics run the full width of the page (like app.tempusmle.com)
+   - Content keeps the source document colours (no re-tinting)
    ========================================================================= */
+html.look-modern .reader-root { max-width: none !important; padding-inline: 2rem; }
+@media (min-width: 1280px) { html.look-modern .reader-root { padding-inline: 2.5rem; } }
 
-/* per-colour accent token (one strong, accessible hue per named colour) */
-html.look-modern .bn-editor [data-background-color=blue],
-html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=blue],
-html.look-modern .bn-editor [data-style-type=textColor][data-value=blue]   { --mc: #3b82f6; }
-html.look-modern .bn-editor [data-background-color=green],
-html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=green],
-html.look-modern .bn-editor [data-style-type=textColor][data-value=green]  { --mc: #16a34a; }
-html.look-modern .bn-editor [data-background-color=red],
-html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=red],
-html.look-modern .bn-editor [data-style-type=textColor][data-value=red]    { --mc: #ef4444; }
-html.look-modern .bn-editor [data-background-color=orange],
-html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=orange],
-html.look-modern .bn-editor [data-style-type=textColor][data-value=orange] { --mc: #f97316; }
-html.look-modern .bn-editor [data-background-color=yellow],
-html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=yellow],
-html.look-modern .bn-editor [data-style-type=textColor][data-value=yellow] { --mc: #d9a406; }
-html.look-modern .bn-editor [data-background-color=pink],
-html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=pink],
-html.look-modern .bn-editor [data-style-type=textColor][data-value=pink]   { --mc: #ec4899; }
-html.look-modern .bn-editor [data-background-color=purple],
-html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=purple],
-html.look-modern .bn-editor [data-style-type=textColor][data-value=purple] { --mc: #8b5cf6; }
-html.look-modern .bn-editor [data-background-color=brown],
-html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=brown],
-html.look-modern .bn-editor [data-style-type=textColor][data-value=brown]  { --mc: #b45309; }
-html.look-modern .bn-editor [data-background-color=gray],
-html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=gray],
-html.look-modern .bn-editor [data-style-type=textColor][data-value=gray]   { --mc: #6b7280; }
+/* topic shell: flat dark sheet like the live app (#191919), header strip #241f1e */
+html.look-modern .topic-article {
+  background: var(--topic-shell, #191919);
+  border-radius: 0.75rem;
+  border-color: color-mix(in oklab, var(--border) 60%, transparent);
+  box-shadow: none;
+}
+html.look-modern .topic-article:hover { box-shadow: none; border-color: color-mix(in oklab, var(--border) 90%, transparent); }
+html.look-modern .topic-article > div:first-child { background: var(--topic-head, #241f1e); padding: 0.85rem 1.5rem; }
+html.look-modern .topic-article > div:first-child::before { display: none; }
+html.look-modern .topic-article h2 { font-size: 1.45rem; font-weight: 600; }
+html.look-modern .topic-body { padding: 0 2rem 1.5rem; border-top: 0; }
+html.look-modern .topic-body .mantine-editor-container { margin-top: 1rem; }
+html:not(.dark) .topic-article, html.light .topic-article { --topic-shell: var(--card); --topic-head: color-mix(in oklab, var(--muted) 70%, var(--card)); }
 
-/* section-heading blocks -> calm tinted panel with a coloured rail */
-html.look-modern .bn-editor [data-background-color] {
-  background: color-mix(in oklab, var(--mc, var(--primary)) 14%, var(--card)) !important;
-  border: 0 !important;
-  border-left: 3px solid var(--mc, var(--primary)) !important;
-  outline: 0 !important;
-  border-radius: 0.7rem;
-  padding: 0.55rem 1rem !important;
-  margin-block: 1.1rem 0.6rem;
-  box-shadow: 0 10px 30px -24px rgba(0,0,0,.4);
-}
-/* ensure no child keeps the old vivid fill */
-html.look-modern .bn-editor [data-background-color] > *,
-html.look-modern .bn-editor [data-background-color] [data-style-type=backgroundColor] {
-  background: transparent !important;
-}
-/* the source CSS also fills the WRAPPER .bn-block with the vivid colour, which
-   framed the panel — make the wrapper transparent so only the tinted panel shows */
-html.look-modern .bn-editor .bn-block:has(> .bn-block-content[data-background-color]) {
-  background: transparent !important;
-  box-shadow: none !important;
-}
-/* heading text inside a coloured block: readable, in the accent hue */
-html.look-modern .bn-editor [data-background-color],
-html.look-modern .bn-editor [data-background-color] * {
-  color: color-mix(in oklab, var(--mc, var(--primary)) 62%, var(--foreground)) !important;
-  font-weight: 700;
-}
-/* size by heading level */
-html.look-modern .bn-editor [data-background-color][data-level="1"] { font-size: 1.5rem; }
-html.look-modern .bn-editor [data-background-color][data-level="2"] { font-size: 1.25rem; }
-html.look-modern .bn-editor [data-background-color][data-level="3"] { font-size: 1.1rem; }
+/* media/tables use the full column; prose is NOT width-capped */
+html.look-modern .bn-editor img { max-height: 40rem; margin-block: 0.5rem; }
+html.look-modern .bn-editor table { width: 100%; margin-block: 0.5rem; border-radius: 0; box-shadow: none; }
+html.look-modern .bn-editor th { background: revert-layer; }
+html.look-modern .bn-editor td, html.look-modern .bn-editor th { padding: 7px 9px; }
 
-/* inline highlighted text (content's own emphasis) -> soft rounded wash */
-html.look-modern .bn-editor [data-style-type=backgroundColor] {
-  background: color-mix(in oklab, var(--mc, #d9a406) 22%, transparent) !important;
-  border-radius: 0.3rem;
-  padding: 0.02em 0.22em;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-}
-/* inline coloured text -> accessible accent hue (keeps weight) */
-html.look-modern .bn-editor [data-style-type=textColor] {
-  color: color-mix(in oklab, var(--mc, var(--foreground)) 72%, var(--foreground)) !important;
-}
+/* inline links: live app = muted, underlined; ours open the split view */
+.bn-editor a.tempu-xref { color: color-mix(in oklab, var(--foreground) 62%, transparent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.bn-editor a.tempu-xref:hover { color: var(--foreground); }
+.bn-editor a.tempu-xref.is-missing { text-decoration-style: dashed; opacity: .75; }
 
-/* callout blocks (quote-icon panels) -> softer, rounder */
-html.look-modern .bn-editor [style*="/editor/quoteIcons/"] {
-  border-radius: 0.8rem !important;
-  box-shadow: 0 10px 30px -24px rgba(0,0,0,.4);
-}
+/* the reader document sits directly on the topic sheet (no inner box) */
+html.look-modern .topic-article .bn-editor { background: transparent !important; padding-inline: 0 !important; border-radius: 0; }
 
-/* bullets/sub-lists: a touch more air and clearer markers */
-html.look-modern .bn-editor [data-content-type=bulletListItem] { margin-block: 0.28rem; }
-
-/* ---------- wider reader: content presentation ---------- */
-html.look-modern .topic-body { padding-inline: 2rem; }
-/* even vertical rhythm between top-level blocks */
-html.look-modern .bn-editor > .bn-block-group > .bn-block-outer { margin-block: 0.12rem; }
-/* images: use the width, stay centred and capped */
-html.look-modern .bn-editor img { max-height: 36rem; margin-block: 0.85rem; }
-/* tables fill the wider column */
-html.look-modern .bn-editor table { width: 100%; margin-block: 0.85rem; }
-/* keep plain prose to a comfortable measure while letting media/sections span full */
-html.look-modern .bn-editor [data-content-type=paragraph],
-html.look-modern .bn-editor [data-content-type=bulletListItem] .bn-inline-content,
-html.look-modern .bn-editor [data-content-type=numberedListItem] .bn-inline-content {
-  max-width: 68ch;
+/* =========================================================================
+   Live-app document palette (copied from app.tempusmle.com, Nov 2026)
+   ========================================================================= */
+html.look-modern .topic-article {
+  --notion-color-gray: #7d7a75; --notion-color-gray-bg: #f9f8f7;
+  --notion-color-brown: #9f765a; --notion-color-brown-bg: #f5ede9;
+  --notion-color-orange: #d27b2d; --notion-color-orange-bg: #fbebde;
+  --notion-color-yellow: #cb9434; --notion-color-yellow-bg: #f9f3dc;
+  --notion-color-green: #50946e; --notion-color-green-bg: #e8f1ec;
+  --notion-color-blue: #387dc9; --notion-color-blue-bg: #e5f2fc;
+  --notion-color-purple: #9a6bb4; --notion-color-purple-bg: #f3ebf9;
+  --notion-color-pink: #c14c8a; --notion-color-pink-bg: #fae9f1;
+  --notion-color-red: #cf5148; --notion-color-red-bg: #fce9e7;
+  --notion-highlight-gray: rgba(42,28,0,.07); --notion-highlight-brown: rgba(139,46,0,.086);
+  --notion-highlight-orange: rgba(224,101,1,.13); --notion-highlight-yellow: rgba(211,168,0,.137);
+  --notion-highlight-green: rgba(0,100,45,.09); --notion-highlight-blue: rgba(0,124,215,.094);
+  --notion-highlight-purple: rgba(102,0,178,.08); --notion-highlight-pink: rgba(197,0,93,.086);
+  --notion-highlight-red: rgba(223,22,0,.094);
+  --doc-ink: #2c2c2b; --doc-table-border: #e6e5e3;
+  --topic-shell: #ffffff; --topic-head: oklch(0.955 0.012 25);
 }
+html.dark.look-modern .topic-article {
+  --notion-color-gray: #93908b; --notion-color-gray-bg: #383836;
+  --notion-color-brown: #b2886b; --notion-color-brown-bg: #45362d;
+  --notion-color-orange: #d27b2d; --notion-color-orange-bg: #53361f;
+  --notion-color-yellow: #cb9434; --notion-color-yellow-bg: #504425;
+  --notion-color-green: #5a9e77; --notion-color-green-bg: #263d30;
+  --notion-color-blue: #4e93e0; --notion-color-blue-bg: #233850;
+  --notion-color-purple: #ad7ec8; --notion-color-purple-bg: #3c2d47;
+  --notion-color-pink: #df67a4; --notion-color-pink-bg: #4e2b3c;
+  --notion-color-red: #e8685d; --notion-color-red-bg: #502c29;
+  --notion-highlight-gray: rgba(255,255,235,.1); --notion-highlight-brown: rgba(255,177,129,.192);
+  --notion-highlight-orange: rgba(255,147,75,.28); --notion-highlight-yellow: rgba(255,205,75,.24);
+  --notion-highlight-green: rgba(108,255,172,.157); --notion-highlight-blue: rgba(67,155,255,.24);
+  --notion-highlight-purple: rgba(200,125,255,.2); --notion-highlight-pink: rgba(255,103,177,.23);
+  --notion-highlight-red: rgba(255,104,92,.24);
+  --doc-ink: #f0efed; --doc-table-border: #383836;
+  --topic-shell: #191919; --topic-head: #241f1e;
+}
+html.look-modern .topic-article .bn-editor { color: var(--doc-ink); }
+html.look-modern .topic-article .bn-editor td,
+html.look-modern .topic-article .bn-editor th { border-color: var(--doc-table-border); }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="gray"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="gray"], html.look-modern .topic-article .bn-editor [data-text-color="gray"] { color: var(--notion-color-gray) !important; }
+html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="gray"] { background-color: var(--notion-highlight-gray) !important; color: inherit; }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="gray"]), html.look-modern .topic-article .bn-editor [data-background-color="gray"] { background-color: var(--notion-color-gray-bg) !important; color: var(--doc-ink); }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="brown"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="brown"], html.look-modern .topic-article .bn-editor [data-text-color="brown"] { color: var(--notion-color-brown) !important; }
+html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="brown"] { background-color: var(--notion-highlight-brown) !important; color: inherit; }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="brown"]), html.look-modern .topic-article .bn-editor [data-background-color="brown"] { background-color: var(--notion-color-brown-bg) !important; color: var(--doc-ink); }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="orange"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="orange"], html.look-modern .topic-article .bn-editor [data-text-color="orange"] { color: var(--notion-color-orange) !important; }
+html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="orange"] { background-color: var(--notion-highlight-orange) !important; color: inherit; }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="orange"]), html.look-modern .topic-article .bn-editor [data-background-color="orange"] { background-color: var(--notion-color-orange-bg) !important; color: var(--doc-ink); }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="yellow"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="yellow"], html.look-modern .topic-article .bn-editor [data-text-color="yellow"] { color: var(--notion-color-yellow) !important; }
+html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="yellow"] { background-color: var(--notion-highlight-yellow) !important; color: inherit; }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="yellow"]), html.look-modern .topic-article .bn-editor [data-background-color="yellow"] { background-color: var(--notion-color-yellow-bg) !important; color: var(--doc-ink); }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="green"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="green"], html.look-modern .topic-article .bn-editor [data-text-color="green"] { color: var(--notion-color-green) !important; }
+html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="green"] { background-color: var(--notion-highlight-green) !important; color: inherit; }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="green"]), html.look-modern .topic-article .bn-editor [data-background-color="green"] { background-color: var(--notion-color-green-bg) !important; color: var(--doc-ink); }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="blue"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="blue"], html.look-modern .topic-article .bn-editor [data-text-color="blue"] { color: var(--notion-color-blue) !important; }
+html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="blue"] { background-color: var(--notion-highlight-blue) !important; color: inherit; }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="blue"]), html.look-modern .topic-article .bn-editor [data-background-color="blue"] { background-color: var(--notion-color-blue-bg) !important; color: var(--doc-ink); }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="purple"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="purple"], html.look-modern .topic-article .bn-editor [data-text-color="purple"] { color: var(--notion-color-purple) !important; }
+html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="purple"] { background-color: var(--notion-highlight-purple) !important; color: inherit; }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="purple"]), html.look-modern .topic-article .bn-editor [data-background-color="purple"] { background-color: var(--notion-color-purple-bg) !important; color: var(--doc-ink); }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="pink"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="pink"], html.look-modern .topic-article .bn-editor [data-text-color="pink"] { color: var(--notion-color-pink) !important; }
+html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="pink"] { background-color: var(--notion-highlight-pink) !important; color: inherit; }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="pink"]), html.look-modern .topic-article .bn-editor [data-background-color="pink"] { background-color: var(--notion-color-pink-bg) !important; color: var(--doc-ink); }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-text-color="red"]), html.look-modern .topic-article .bn-editor [data-style-type="textColor"][data-value="red"], html.look-modern .topic-article .bn-editor [data-text-color="red"] { color: var(--notion-color-red) !important; }
+html.look-modern .topic-article .bn-editor [data-style-type="backgroundColor"][data-value="red"] { background-color: var(--notion-highlight-red) !important; color: inherit; }
+html.look-modern .topic-article .bn-editor .bn-block:has(> .bn-block-content[data-background-color="red"]), html.look-modern .topic-article .bn-editor [data-background-color="red"] { background-color: var(--notion-color-red-bg) !important; color: var(--doc-ink); }

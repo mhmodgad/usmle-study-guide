@@ -19,6 +19,7 @@ import re
 import sys
 
 from . import db as dbmod
+from . import structure as structmod
 from .render import bn_render, card_render
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -176,6 +177,70 @@ def load_sections(conn, content):
     return nsec, ntop
 
 
+def rerender_documents(conn, content=None, quiet=False):
+    """Re-render every stored topic's reader HTML from the section JSON files.
+
+    Touches only topics.document_html / plain_text (no user state, no other
+    content), so it is safe to run on an existing database. Records the
+    renderer version in meta so the app knows the stored HTML is current.
+    """
+    content = content or DEFAULT_CONTENT
+    sections_dir = os.path.join(content, "sections")
+    n = 0
+    if os.path.isdir(sections_dir):
+        for sid in sorted(os.listdir(sections_dir)):
+            sj = os.path.join(sections_dir, sid, "section.json")
+            if not os.path.isfile(sj):
+                continue
+            try:
+                data = load_json(sj)
+            except Exception:  # noqa: BLE001
+                continue
+            primary = (data.get("payload") or {}).get("primary") or {}
+            for t in primary.get("topics") or []:
+                tid = t.get("id")
+                if not tid:
+                    continue
+                doc = t.get("document")
+                conn.execute("UPDATE topics SET document_html=?, plain_text=? WHERE id=?",
+                             (bn_render.render_document(doc), _plain_from_blocknote(doc), tid))
+                n += 1
+    else:
+        if not quiet:
+            print("  ! no sections dir:", sections_dir)
+        return 0
+    conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('render_version',?)",
+                 (str(bn_render.RENDER_VERSION),))
+    conn.commit()
+    if not quiet:
+        print(f"  re-rendered {n} topic documents (renderer v{bn_render.RENDER_VERSION})")
+    return n
+
+
+def ensure_render_current(db_path=None, content=None):
+    """Re-render stored topic HTML once after a renderer upgrade."""
+    try:
+        conn = dbmod.connect(db_path)
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key='render_version'").fetchone()
+        except Exception:  # noqa: BLE001 - no meta table yet (DB not built)
+            conn.close()
+            return False
+        if row and str(row[0]) == str(bn_render.RENDER_VERSION):
+            conn.close()
+            return False
+        if not conn.execute("SELECT 1 FROM topics LIMIT 1").fetchone():
+            conn.close()
+            return False
+        print("Updating stored topic documents for the new reader (one time)…")
+        rerender_documents(conn, content)
+        conn.close()
+        return True
+    except Exception as e:  # noqa: BLE001 - never block the app from starting
+        print("  ! could not re-render topic documents:", e)
+        return False
+
+
 _WS = re.compile(r"\s+")
 
 
@@ -194,6 +259,10 @@ def _plain_from_blocknote(doc):
             for run in c:
                 if isinstance(run, dict) and run.get("text"):
                     out.append(run["text"])
+                elif isinstance(run, dict) and run.get("type") == "link":
+                    for r2 in run.get("content") or []:
+                        if isinstance(r2, dict) and r2.get("text"):
+                            out.append(r2["text"])
         elif isinstance(c, dict):  # table
             for row in c.get("rows") or []:
                 for cell in row.get("cells") or []:
@@ -577,9 +646,15 @@ def build(content=DEFAULT_CONTENT, db_path=None, include_step1=False,
     npins = seed_pins(conn)
     ndeck = seed_decks(conn)
     print(f"  pins={npins}  deck cards matched={ndeck}")
+    dbmod.ensure_user_tables(conn)
+    nrep = structmod.replay(conn)
+    if nrep:
+        print(f"  re-applied {nrep} of your structure changes (chapters/sections/topics)")
     print("Building search index…")
     build_search(conn)
     conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('built_at',?)", (_now(),))
+    conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('render_version',?)",
+                 (str(bn_render.RENDER_VERSION),))
     conn.commit()
     # summary
     counts = {}
@@ -599,7 +674,15 @@ def main(argv=None):
     ap.add_argument("--step1", action="store_true", help="also load STEP 1 cards")
     ap.add_argument("--wipe-user", action="store_true", help="discard existing user state and reseed")
     ap.add_argument("--no-reset", action="store_true", help="do not clear content tables first")
+    ap.add_argument("--rerender", action="store_true",
+                    help="only re-render the stored topic documents (keeps everything else)")
     args = ap.parse_args(argv)
+    if args.rerender:
+        conn = dbmod.connect(args.db)
+        dbmod.init_schema(conn)
+        rerender_documents(conn, args.content)
+        conn.close()
+        return
     build(content=args.content, db_path=args.db, include_step1=args.step1,
           wipe_user=args.wipe_user, reset=not args.no_reset)
 

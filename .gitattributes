@@ -1,4 +1,6 @@
-# Windows scripts must keep CRLF or cmd.exe can misparse them
+# Windows scripts must keep CRLF or cmd.exe can misparse them. Git stores
+# them with LF and converts on checkout, so every platform gets CRLF.
+# (Never commit CRLF into these: every fresh copy would then show as modified.)
 *.bat text eol=crlf
 *.ps1 text eol=crlf
 # Linux scripts stay LF

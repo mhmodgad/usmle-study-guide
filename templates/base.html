@@ -1,9 +1,12 @@
 <!DOCTYPE html>
-<html lang="en" class="__variable_0cafb8 __variable_c5437d h-full antialiased {{ theme }}" data-mantine-color-scheme="{{ theme }}" style="color-scheme: {{ theme }};">
+<html lang="en" class="__variable_0cafb8 __variable_c5437d h-full antialiased {{ theme }}{% if embed %} tempu-embed{% endif %}" data-mantine-color-scheme="{{ theme }}" style="color-scheme: {{ theme }};">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}TEMP-U{% endblock %}</title>
+<link rel="icon" href="/app-icon" sizes="any">
+<link rel="apple-touch-icon" href="/app-icon">
+<meta name="theme-color" content="#151b23">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/overrides.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/modern.css') }}">

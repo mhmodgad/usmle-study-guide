@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS libraries (
     slug        TEXT,
     exam_scope  TEXT,
     sort_order  INTEGER DEFAULT 0,
-    locked      INTEGER DEFAULT 0
+    locked      INTEGER DEFAULT 0,
+    icon_path   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS chapters (
@@ -206,6 +207,53 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
+-- content edits made in the app's editor. Kept apart from the content
+-- tables so rebuilding content from the source JSON never loses them.
+CREATE TABLE IF NOT EXISTS topic_edits (
+    topic_id    TEXT PRIMARY KEY,
+    html        TEXT NOT NULL,     -- edited reader HTML (replaces document_html)
+    title       TEXT,              -- edited topic title (NULL = original)
+    plain_text  TEXT,
+    base_version INTEGER,
+    updated_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS topic_edit_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id    TEXT NOT NULL,
+    html        TEXT,
+    title       TEXT,
+    saved_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_edit_history_topic ON topic_edit_history(topic_id);
+
+-- user changes to the library structure (see tempu/structure.py)
+CREATE TABLE IF NOT EXISTS struct_overrides (
+    kind        TEXT NOT NULL,       -- chapter | section | topic
+    id          TEXT NOT NULL,
+    created     INTEGER DEFAULT 0,   -- made by the user
+    parent_id   TEXT,
+    sort_order  INTEGER,
+    title       TEXT,
+    icon_path   TEXT,
+    deleted     INTEGER DEFAULT 0,   -- 1 = in trash, 2 = deleted forever
+    deleted_at  TEXT,
+    payload     TEXT,                -- deleted rows (JSON) for restore
+    updated_at  TEXT,
+    PRIMARY KEY (kind, id)
+);
+
+-- per-section reading state: resume position, visits, bookmark
+CREATE TABLE IF NOT EXISTS section_state (
+    section_id     TEXT PRIMARY KEY,
+    last_opened_at TEXT,
+    open_count     INTEGER DEFAULT 0,
+    last_topic_id  TEXT,
+    scroll_ratio   REAL,
+    bookmarked     INTEGER DEFAULT 0,
+    updated_at     TEXT
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -226,6 +274,26 @@ def connect(db_path=None):
 
 def init_schema(conn):
     conn.executescript(SCHEMA_SQL)
+    conn.commit()
+
+
+USER_TABLES_SQL = SCHEMA_SQL[SCHEMA_SQL.index("-- content edits made"):SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS meta (")] + """
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+"""
+
+
+def ensure_user_tables(conn):
+    """Add tables introduced after a database was first built."""
+    conn.executescript(USER_TABLES_SQL)
+    for table, col, decl in (("topic_edits", "title", "TEXT"),
+                             ("topic_edit_history", "title", "TEXT"),
+                             ("libraries", "icon_path", "TEXT")):
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if cols and col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     conn.commit()
 
 

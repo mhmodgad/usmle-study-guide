@@ -163,7 +163,10 @@
   if (headerSearch) headerSearch.addEventListener('focus', e => { e.target.blur(); openSearch(); });
   if (headerSearch) headerSearch.addEventListener('click', openSearch);
   document.addEventListener('keydown', e => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openSearch(); }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      if (document.activeElement && document.activeElement.closest && document.activeElement.closest('.topic-article.is-editing')) return; // editor uses Ctrl+K for links
+      e.preventDefault(); openSearch();
+    }
     if (e.key === 'Escape') { closeSearch(); closeAll(); if (!mqDesktop.matches) setSidebar(false); }
   });
   if (dlg) dlg.addEventListener('mousedown', e => { if (e.target === dlg) closeSearch(); });

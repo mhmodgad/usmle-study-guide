@@ -87,10 +87,35 @@ def library(library_id):
     pin_count = sum(1 for c in chapters if c["pinned"])
     sec_done, sec_total = S.sections_studied(library_id=library_id)
     done, total = S.library_progress(library_id)
+    ov = S.library_overview(library_id)
+    for c in chapters:
+        for sec in c["section_list"]:
+            sec.update(ov.get(sec["id"], {"topics": []}))
+            sec["downloaded"] = sec["total"] > 0
+            sec["status"] = ("empty" if not sec["total"] else "studied" if sec["studied"]
+                             else "progress" if sec["done"] else "new")
+        c["studied_secs"] = sum(1 for x in c["section_list"] if x["studied"])
+        c["mine"] = g.db.execute("SELECT 1 FROM struct_overrides WHERE kind='chapter' AND id=? "
+                                 "AND created=1", (c["row"]["id"],)).fetchone() is not None
+    search_index = [{"s": sec["id"], "c": c["row"]["id"], "t": [t[1] for t in sec["topics"]],
+                     "ti": [t[0] for t in sec["topics"]]}
+                    for c in chapters for sec in c["section_list"]]
     return render_template("library.html", active="libraries", library=lib,
                            chapters=chapters, sec_done=sec_done, sec_total=sec_total,
                            libraries=S.library_rows(), pin_count=pin_count,
+                           continue_rows=S.continue_reading(library_id, 3),
+                           bookmarks=S.bookmarked_sections(library_id),
+                           search_index=search_index,
                            pct=round(100 * done / total) if total else 0)
+
+
+@bp.route("/libraries/<library_id>/organize")
+def organize(library_id):
+    lib = g.db.execute("SELECT * FROM libraries WHERE id=?", (library_id,)).fetchone()
+    if not lib:
+        abort(404)
+    return render_template("organize.html", active="libraries", library=lib,
+                           back_href="/libraries/%s" % library_id)
 
 
 @bp.route("/libraries/<library_id>/chapters/<chapter_id>")
@@ -105,13 +130,28 @@ def chapter(library_id, chapter_id):
         ncards = g.db.execute(
             "SELECT COUNT(*) n FROM cards cd JOIN topics t ON cd.topic_id=t.id "
             "WHERE t.section_id=?", (s["id"],)).fetchone()["n"]
+        topics = [dict(r) for r in g.db.execute(
+            "SELECT t.id, COALESCE(e.title,t.title) title, COALESCE(p.completed,0) completed "
+            "FROM topics t LEFT JOIN topic_edits e ON e.topic_id=t.id "
+            "LEFT JOIN progress p ON p.topic_id=t.id WHERE t.section_id=? "
+            "ORDER BY t.sort_order, t.rowid", (s["id"],))]
+        st = g.db.execute("SELECT * FROM section_state WHERE section_id=?", (s["id"],)).fetchone()
         sections.append({"row": s, "done": done, "total": total, "cards": ncards,
                          "pct": round(100 * done / total) if total else 0,
-                         "icon": S.icon_web_path(s["icon_path"])})
+                         "icon": S.icon_web_path(s["icon_path"]), "topics": topics,
+                         "bookmarked": bool(st and st["bookmarked"]),
+                         "last_opened": st["last_opened_at"] if st else None,
+                         "minutes": max(1, round((s["total_words"] or 0) / 200)) if s["total_words"] else None})
     done, total = S.chapter_progress(chapter_id)
     sec_done, sec_total = S.sections_studied(chapter_id=chapter_id)
+    chs = S.chapter_rows(library_id)
+    ids = [c["id"] for c in chs]
+    i = ids.index(chapter_id) if chapter_id in ids else -1
+    prev_ch = chs[i - 1] if i > 0 else None
+    next_ch = chs[i + 1] if 0 <= i < len(chs) - 1 else None
     return render_template("chapter.html", active="libraries", library=lib, chapter=ch,
                            sections=sections, sec_done=sec_done, sec_total=sec_total,
+                           prev_ch=prev_ch, next_ch=next_ch,
                            pct=round(100 * done / total) if total else 0)
 
 
@@ -124,6 +164,18 @@ def reader_full(library_id, chapter_id, section_id):
 @bp.route("/sections/<section_id>")
 def reader_short(section_id):
     return _reader(section_id)
+
+
+# in-document cross references, as stored in the content (/r/t/<topic>, /r/b/<topic>/<block>)
+@bp.route("/r/t/<topic_id>")
+@bp.route("/r/b/<topic_id>/<block_id>")
+def xref(topic_id, block_id=None):
+    hit = S.resolve_topic(topic_id)
+    if not hit:
+        return render_template("xref_missing.html", active="libraries", topic_id=topic_id), 404
+    frag = ("#block-%s" % block_id) if block_id else ("#topic-%s" % topic_id)
+    return redirect("/libraries/%s/chapters/%s/sections/%s%s" % (
+        hit["library_id"], hit["chapter_id"], hit["section_id"], frag))
 
 
 @bp.route("/libraries/<library_id>/chapters/<chapter_id>/sections/<section_id>/topics/<topic_id>/annotate")
@@ -151,10 +203,11 @@ def _reader(section_id):
         tids)} if tids else {}
     hi = _grouped(tids, "highlights")
     inl = _grouped(tids, "inline_notes")
-    nxt = None
-    if sec["next_section_id"]:
-        nxt = g.db.execute("SELECT id,title FROM sections WHERE id=?",
-                           (sec["next_section_id"],)).fetchone()
+    prv, nxt = S.section_neighbours(section_id)
+    st = g.db.execute("SELECT * FROM section_state WHERE section_id=?", (section_id,)).fetchone()
+    sec_mine = g.db.execute("SELECT 1 FROM struct_overrides WHERE kind='section' AND id=? AND created=1",
+                            (section_id,)).fetchone() is not None
+    words = sum(len((t["plain_text"] or "").split()) for t in topics)
     topic_views = []
     for t in topics:
         topic_views.append({
@@ -181,7 +234,9 @@ def _reader(section_id):
     # section header image intentionally left blank for all sections
     banner = None
     return render_template("reader.html", active="libraries", library=lib, chapter=ch,
-                           section=sec, topics=topic_views, next_section=nxt,
+                           section=sec, topics=topic_views, next_section=nxt, prev_section=prv,
+                           section_state=dict(st) if st else {}, sec_mine=sec_mine,
+                           read_minutes=max(1, round(words / 200)) if words else 0,
                            sec_done=sec_done, sec_total=len(topics), banner=banner,
                            lib_chapters=S.chapter_rows(lib["id"]),
                            chap_sections=S.section_rows(ch["id"]),

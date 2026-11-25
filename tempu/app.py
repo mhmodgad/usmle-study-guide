@@ -1,7 +1,7 @@
 """Flask application factory for the TEMP-U local app."""
 import os
 
-from flask import Flask, g, send_from_directory, redirect, abort
+from flask import Flask, g, send_from_directory, redirect, abort, request
 
 from . import db as dbmod
 from . import service
@@ -50,6 +50,20 @@ def create_app(db_path=None, assets_dir=None):
     app.config["DB_PATH"] = db_path or dbmod.DEFAULT_DB
     app.config["ASSETS_DIR"] = assets_dir or DEFAULT_ASSETS
     app.config["JSON_SORT_KEYS"] = False
+    app.config["UPLOADS_DIR"] = os.environ.get(
+        "TEMPU_UPLOADS", os.path.join(os.path.dirname(os.path.abspath(app.config["DB_PATH"])), "uploads"))
+    app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
+
+    # one-time upgrades of an existing database (safe, idempotent)
+    try:
+        _c = dbmod.connect(app.config["DB_PATH"])
+        dbmod.ensure_user_tables(_c)
+        _c.close()
+    except Exception as e:  # noqa: BLE001
+        print("  ! could not prepare user tables:", e)
+    if not os.environ.get("TEMPU_SKIP_RERENDER"):
+        from . import loader as _loader
+        _loader.ensure_render_current(app.config["DB_PATH"])
 
     @app.before_request
     def _open_db():
@@ -87,6 +101,8 @@ def create_app(db_path=None, assets_dir=None):
             "display_name": settings.get("displayName", "Student"),
             "initials": settings.get("initials", "ST"),
             "notif_unread": service.notif_unread(),
+            "embed": request.args.get("embed") == "1",
+            "icon_web": service.icon_web_path,
         }
 
     # ---- serve captured assets (fonts, icons, media, logos) ----
@@ -106,10 +122,49 @@ def create_app(db_path=None, assets_dir=None):
     def editor_assets(relpath):
         base = os.path.normpath(os.path.join(app.config["ASSETS_DIR"], "editor"))
         full = os.path.normpath(os.path.join(base, relpath))
+        if not full.startswith(base + os.sep):
+            abort(404)
+        if not os.path.isfile(full):
+            # callout icons that aren't in your assets: use the built-in set (static/callout-icons)
+            name = os.path.splitext(os.path.basename(relpath))[0]
+            fallback = os.path.join(app.static_folder, "callout-icons", name + ".svg")
+            if relpath.startswith("quoteIcons/") and os.path.isfile(fallback):
+                return send_from_directory(os.path.dirname(fallback), os.path.basename(fallback), max_age=86400)
+            abort(404)
+        directory, fname = os.path.split(full)
+        return send_from_directory(directory, fname, max_age=86400)
+
+    # images the user added with the content editor (data/uploads, gitignored)
+    @app.route("/uploads/<path:relpath>")
+    def uploads(relpath):
+        base = os.path.normpath(app.config["UPLOADS_DIR"])
+        full = os.path.normpath(os.path.join(base, relpath))
         if not full.startswith(base + os.sep) or not os.path.isfile(full):
             abort(404)
         directory, fname = os.path.split(full)
         return send_from_directory(directory, fname, max_age=86400)
+
+    # browser tab icon: your own logo from the assets folder if present,
+    # otherwise a neutral built-in icon (branding is not shipped in the repo)
+    @app.route("/favicon.ico")
+    @app.route("/app-icon")
+    def favicon():
+        base = app.config["ASSETS_DIR"]
+        for rel in ("favicon.png", "favicon.ico", "logos/applogo.webp", "TEMPU_Logo.png", "logos/applogo.png"):
+            full = os.path.join(base, rel)
+            if os.path.isfile(full):
+                small = os.path.join(os.path.dirname(os.path.abspath(app.config["DB_PATH"])), "app-icon-64.png")
+                try:   # a small copy loads faster; needs Pillow, otherwise send the original
+                    if not os.path.isfile(small) or os.path.getmtime(small) < os.path.getmtime(full):
+                        from PIL import Image
+                        im = Image.open(full).convert("RGBA")
+                        im.thumbnail((128, 128))
+                        im.save(small, "PNG")
+                    return send_from_directory(os.path.dirname(small), os.path.basename(small), max_age=86400)
+                except Exception:  # noqa: BLE001
+                    d, f = os.path.split(full)
+                    return send_from_directory(d, f, max_age=86400)
+        return send_from_directory(app.static_folder, "favicon.svg", max_age=86400)
 
     @app.route("/")
     def index():

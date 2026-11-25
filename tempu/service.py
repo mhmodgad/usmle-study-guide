@@ -53,20 +53,38 @@ def library_rows():
 
 def chapter_rows(library_id):
     return g.db.execute(
-        "SELECT * FROM chapters WHERE library_id=? ORDER BY sort_order", (library_id,)
+        "SELECT * FROM chapters WHERE library_id=? ORDER BY sort_order, rowid", (library_id,)
     ).fetchall()
 
 
 def section_rows(chapter_id):
     return g.db.execute(
-        "SELECT * FROM sections WHERE chapter_id=? ORDER BY sort_order", (chapter_id,)
+        "SELECT * FROM sections WHERE chapter_id=? ORDER BY sort_order, rowid", (chapter_id,)
     ).fetchall()
 
 
 def topic_rows(section_id):
+    """Topics of a section; document_html is the user's edited version when one exists."""
     return g.db.execute(
-        "SELECT * FROM topics WHERE section_id=? ORDER BY sort_order", (section_id,)
+        "SELECT t.id, t.section_id, t.sort_order, t.document_version, t.icon_url, "
+        "       t.plain_text, t.has_cards, t.updated_at, "
+        "       COALESCE(e.html, t.document_html) AS document_html, "
+        "       COALESCE(e.title, t.title) AS title, t.title AS original_title, "
+        "       e.updated_at AS edited_at "
+        "FROM topics t LEFT JOIN topic_edits e ON e.topic_id=t.id "
+        "WHERE t.section_id=? ORDER BY t.sort_order", (section_id,)
     ).fetchall()
+
+
+def resolve_topic(topic_id):
+    """topic id -> {topic, section, chapter, library} rows for cross references, or None."""
+    row = g.db.execute(
+        "SELECT t.id topic_id, t.title topic_title, s.id section_id, s.title section_title, "
+        "       c.id chapter_id, c.title chapter_title, c.library_id "
+        "FROM topics t JOIN sections s ON s.id=t.section_id "
+        "LEFT JOIN chapters c ON c.id=s.chapter_id WHERE t.id=?", (topic_id,)
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def sections_by_chapter(library_id):
@@ -79,7 +97,7 @@ def sections_by_chapter(library_id):
         "FROM sections s JOIN chapters c ON s.chapter_id=c.id "
         "LEFT JOIN topics t ON t.section_id=s.id "
         "LEFT JOIN progress p ON p.topic_id=t.id "
-        "WHERE c.library_id=? GROUP BY s.id ORDER BY s.sort_order",
+        "WHERE c.library_id=? GROUP BY s.id ORDER BY s.sort_order, s.rowid",
         (library_id,)).fetchall()
     out = {}
     for r in rows:
@@ -183,8 +201,110 @@ def icon_web_path(icon_path):
     """iconPath 'preset/icons/medical/<x>.webp' -> local asset URL."""
     if not icon_path:
         return None
+    if icon_path.startswith(("/uploads/", "/assets/", "http://", "https://")):
+        return icon_path
     if icon_path.startswith("preset/icons/medical/"):
         return "/assets/icons/medical/" + icon_path.split("/")[-1]
     if icon_path.startswith("content/") or icon_path.endswith((".png", ".webp")):
         return "/assets/icons/" + icon_path.split("/")[-1]
     return "/assets/icons/medical/" + icon_path.split("/")[-1]
+
+
+def library_overview(library_id):
+    """Per-section facts for the library page: progress, revisions, notes,
+    highlights, edits, bookmark, last opened, topic titles (for search)."""
+    q = lambda sql: {r[0]: r for r in g.db.execute(sql, (library_id,)).fetchall()}
+    base = ("FROM topics t JOIN sections s ON s.id=t.section_id JOIN chapters c ON c.id=s.chapter_id "
+            "WHERE c.library_id=? ")
+    revised = q("SELECT t.section_id, MIN(COALESCE(p.reopened,0)) mn, MAX(COALESCE(p.reopened,0)) mx "
+                "FROM topics t JOIN sections s ON s.id=t.section_id JOIN chapters c ON c.id=s.chapter_id "
+                "LEFT JOIN progress p ON p.topic_id=t.id WHERE c.library_id=? GROUP BY t.section_id")
+    notes = q("SELECT t.section_id, COUNT(*) n FROM topic_notes n JOIN topics t ON t.id=n.topic_id "
+              "JOIN sections s ON s.id=t.section_id JOIN chapters c ON c.id=s.chapter_id "
+              "WHERE c.library_id=? AND COALESCE(n.plain_text,'')<>'' GROUP BY t.section_id")
+    hls = q("SELECT t.section_id, COUNT(*) n FROM (SELECT topic_id FROM highlights UNION ALL "
+            "SELECT topic_id FROM inline_notes) h JOIN topics t ON t.id=h.topic_id "
+            "JOIN sections s ON s.id=t.section_id JOIN chapters c ON c.id=s.chapter_id "
+            "WHERE c.library_id=? GROUP BY t.section_id")
+    edits = q("SELECT t.section_id, COUNT(*) n FROM topic_edits e JOIN topics t ON t.id=e.topic_id "
+              "JOIN sections s ON s.id=t.section_id JOIN chapters c ON c.id=s.chapter_id "
+              "WHERE c.library_id=? GROUP BY t.section_id")
+    state = q("SELECT st.section_id, st.* FROM section_state st JOIN sections s ON s.id=st.section_id "
+              "JOIN chapters c ON c.id=s.chapter_id WHERE c.library_id=?")
+    titles = {}
+    for r in g.db.execute("SELECT t.section_id, t.id, COALESCE(e.title, t.title) title "
+                          "FROM topics t LEFT JOIN topic_edits e ON e.topic_id=t.id "
+                          "JOIN sections s ON s.id=t.section_id JOIN chapters c ON c.id=s.chapter_id "
+                          "WHERE c.library_id=? ORDER BY t.sort_order", (library_id,)):
+        titles.setdefault(r["section_id"], []).append([r["id"], r["title"]])
+    mine = {r[0] for r in g.db.execute("SELECT id FROM struct_overrides WHERE kind='section' AND created=1")}
+    out = {}
+    for sid in set(list(revised) + list(state) + list(titles)):
+        rv, st = revised.get(sid), state.get(sid)
+        out[sid] = {
+            "revised": (rv["mn"] or 0) if rv else 0,
+            "notes": notes[sid]["n"] if sid in notes else 0,
+            "highlights": hls[sid]["n"] if sid in hls else 0,
+            "edited": edits[sid]["n"] if sid in edits else 0,
+            "bookmarked": bool(st and st["bookmarked"]),
+            "last_opened": st["last_opened_at"] if st else None,
+            "opens": (st["open_count"] or 0) if st else 0,
+            "last_topic": st["last_topic_id"] if st else None,
+            "topics": titles.get(sid, []),
+        }
+    for sid in mine:
+        out.setdefault(sid, {"topics": []})["mine"] = True
+    return out
+
+
+def continue_reading(library_id=None, limit=1):
+    """Most recently opened sections (with where the user stopped)."""
+    sql = ("SELECT st.*, s.title section_title, s.chapter_id, c.title chapter_title, c.library_id, "
+           "       (SELECT COALESCE(e.title,t.title) FROM topics t LEFT JOIN topic_edits e ON e.topic_id=t.id "
+           "        WHERE t.id=st.last_topic_id) topic_title "
+           "FROM section_state st JOIN sections s ON s.id=st.section_id JOIN chapters c ON c.id=s.chapter_id "
+           "WHERE st.last_opened_at IS NOT NULL ")
+    args = []
+    if library_id:
+        sql += "AND c.library_id=? "
+        args.append(library_id)
+    sql += "ORDER BY st.last_opened_at DESC LIMIT ?"
+    args.append(limit)
+    rows = []
+    for r in g.db.execute(sql, args).fetchall():
+        d = dict(r)
+        done, total = section_progress(r["section_id"])
+        d.update(done=done, total=total, pct=round(100 * done / total) if total else 0)
+        d["url"] = "/libraries/%s/chapters/%s/sections/%s%s" % (
+            r["library_id"], r["chapter_id"], r["section_id"],
+            ("#topic-" + r["last_topic_id"]) if r["last_topic_id"] else "")
+        rows.append(d)
+    return rows
+
+
+def bookmarked_sections(library_id):
+    return [dict(r) for r in g.db.execute(
+        "SELECT s.id, s.title, s.chapter_id, c.title chapter_title FROM section_state st "
+        "JOIN sections s ON s.id=st.section_id JOIN chapters c ON c.id=s.chapter_id "
+        "WHERE st.bookmarked=1 AND c.library_id=? ORDER BY c.sort_order, s.sort_order", (library_id,))]
+
+
+def section_neighbours(section_id):
+    """(previous, next) section in reading order across the whole library,
+    following the user's current structure (not the source's next link)."""
+    sec = g.db.execute("SELECT s.id, c.library_id FROM sections s JOIN chapters c ON c.id=s.chapter_id "
+                       "WHERE s.id=?", (section_id,)).fetchone()
+    if not sec:
+        return None, None
+    order = g.db.execute(
+        "SELECT s.id, s.title, s.chapter_id, c.title chapter_title FROM sections s "
+        "JOIN chapters c ON c.id=s.chapter_id WHERE c.library_id=? "
+        "AND EXISTS (SELECT 1 FROM topics t WHERE t.section_id=s.id) "
+        "ORDER BY c.sort_order, c.rowid, s.sort_order, s.rowid", (sec["library_id"],)).fetchall()
+    ids = [r["id"] for r in order]
+    if section_id not in ids:
+        return None, None
+    i = ids.index(section_id)
+    prev = dict(order[i - 1]) if i > 0 else None
+    nxt = dict(order[i + 1]) if i + 1 < len(order) else None
+    return prev, nxt

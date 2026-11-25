@@ -23,6 +23,30 @@ MEDIA_DIR = os.path.join(ANALYSIS, "content", "media", "topics")
 
 VID_EXT = (".mp4", ".webm", ".mov", ".m4v")
 
+# Bump when the HTML this module emits changes; the app re-renders stored
+# topic documents automatically when the stored version is older.
+RENDER_VERSION = 2
+
+import re as _re_mod
+_XREF_RE = _re_mod.compile(r"^/r/(t|b)/([0-9a-f-]{36})(?:/([0-9a-f-]{36}))?")
+
+
+def link_open(href):
+    """Opening <a> for a BlockNote link run.
+
+    In-app cross references (/r/t/<topicId>, /r/b/<topicId>/<blockId>) become
+    data-attributed links the reader resolves locally and opens in a split
+    view; anything else is a normal external link.
+    """
+    href = href or ""
+    m = _XREF_RE.match(href)
+    if m:
+        kind, tid, bid = m.group(1), m.group(2), m.group(3) or ""
+        return (f'<a class="tempu-xref" href="/r/{kind}/{tid}{"/" + bid if bid else ""}" '
+                f'data-ref-topic="{tid}" data-ref-block="{bid}">')
+    return (f'<a class="tempu-extlink" href="{H.escape(href, quote=True)}" '
+            'target="_blank" rel="noopener noreferrer">')
+
 IMAGE_ICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" '
     'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
@@ -196,6 +220,17 @@ def inline_html(content):
             continue
         rtype = run.get("type") or "text"
         styles = run.get("styles") or {}
+        if rtype == "link":
+            # close any open marks, emit the link with its own inner runs
+            for o in reversed(stack):
+                out.append(o[1])
+            stack = []
+            inner = inline_html(run.get("content") or [])
+            if inner == '<br class="ProseMirror-trailingBreak">':
+                inner = esc(run.get("href") or "")
+            out.append(link_open(run.get("href")) + inner + "</a>")
+            last_br = False
+            continue
         if rtype == "math":
             push(math_html((run.get("props") or {}).get("equation")), styles)
             continue

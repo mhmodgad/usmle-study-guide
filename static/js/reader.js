@@ -71,7 +71,7 @@
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.toString().trim()) { hideToolbar(); return; }
     const range = sel.getRangeAt(0), article = articleOf(range.commonAncestorContainer);
-    if (!article) { hideToolbar(); return; }
+    if (!article || article.classList.contains('is-editing')) { hideToolbar(); return; }
     const {prefix, suffix} = quoteContext(article, range);
     pending = {article, topic: article.dataset.topicId, title: titleOf(article),
                range: range.cloneRange(), selected: sel.toString(), prefix, suffix};
@@ -374,72 +374,292 @@
     if (r.id) await addToCollection(r.id);
   });
 
-  // ---- per-topic flashcards dialog ----
+  // ---- per-topic flashcards dialog (live-app layout: fixed size, quick review) ----
   const fcModal = document.getElementById('fc-modal');
+  const KBD = k => `<kbd class="fc-kbd">${k}</kbd>`;
+  const ARROW_L = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>';
+  const ARROW_R = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
+  let fc = null;   // {all, deck, i, revealed, results:{id:'got'|'miss'}}
+  function fcClose() {
+    if (!fcModal) return;
+    fcModal.classList.add('hidden'); fcModal.setAttribute('aria-hidden', 'true');
+    document.documentElement.classList.remove('fc-open');
+    fc = null;
+  }
+  function fcRender() {
+    const stage = document.getElementById('fc-stage'), foot = document.getElementById('fc-foot');
+    const top = document.getElementById('fc-top');
+    const n = fc.deck.length;
+    const got = Object.values(fc.results).filter(v => v === 'got').length;
+    const miss = Object.values(fc.results).filter(v => v === 'miss').length;
+    document.getElementById('fc-got').textContent = got;
+    document.getElementById('fc-miss').textContent = miss;
+    document.getElementById('fc-end').disabled = !(got + miss);
+    document.querySelector('.fc-body').scrollTop = 0;
+    if (fc.done || !n) {
+      top.classList.add('hidden');
+      stage.innerHTML = !n ? '<div class="fc-empty">No flashcards for this topic.</div>' :
+        `<div class="fc-summary"><p class="text-sm font-medium uppercase tracking-widest text-muted-foreground">Session complete</p>
+          <p class="mt-3 text-4xl font-semibold tabular-nums">${got}<span class="text-xl text-muted-foreground"> / ${got + miss}</span></p>
+          <p class="mt-1 text-sm text-muted-foreground">cards you got right</p>
+          <div class="mt-6 flex justify-center gap-2"><span class="fc-pill fc-pill-got">✓ Got ${got}</span><span class="fc-pill fc-pill-miss">↺ Missed ${miss}</span></div></div>`;
+      foot.innerHTML = !n ? '' : `<div class="grid gap-2 ${miss ? 'grid-cols-2' : ''}">
+          ${miss ? `<button class="fc-btn fc-btn-primary" data-fc="missed">Review missed (${miss})</button>` : ''}
+          <button class="fc-btn ${miss ? 'fc-btn-outline' : 'fc-btn-primary'}" data-fc="again">Start over</button></div>
+          <div class="flex justify-center"><button class="fc-btn fc-btn-ghost" data-fc="close">Close</button></div>`;
+      return;
+    }
+    top.classList.remove('hidden');
+    const c = fc.deck[fc.i];
+    document.getElementById('fc-idx').textContent = fc.i + 1;
+    document.getElementById('fc-of').textContent = 'of ' + n;
+    document.getElementById('fc-bar').style.transform = `scaleX(${(fc.i) / n})`;
+    stage.innerHTML = `<div class="fc-card-wrap">${fc.revealed ? c.back_html : c.front_html}</div>`;
+    if (fc.revealed) { const lbl = stage.querySelector('.card-surface .uppercase span'); if (lbl) lbl.textContent = 'Answer'; }
+    foot.innerHTML = (fc.revealed
+        ? `<div class="grid grid-cols-2 gap-2" role="group" aria-label="How did it go?">
+             <button class="fc-btn fc-btn-miss" data-fc="miss">↺ Missed it ${KBD('1')}</button>
+             <button class="fc-btn fc-btn-got" data-fc="got">✓ Got it ${KBD('2')}</button></div>`
+        : `<button class="fc-btn fc-btn-primary fc-btn-lg" data-fc="reveal">Reveal answer ${KBD('Space')}</button>`) +
+      `<div class="flex items-center justify-between">
+         <button class="fc-btn fc-btn-ghost" data-fc="prev" ${fc.i === 0 ? 'disabled' : ''}>${KBD(ARROW_L)} Previous</button>
+         <button class="fc-btn fc-btn-ghost" data-fc="next">Next ${KBD(ARROW_R)}</button></div>`;
+  }
+  function fcAct(a) {
+    if (!fc) return;
+    if (a === 'close') return fcClose();
+    if (a === 'reveal') { fc.revealed = true; return fcRender(); }
+    if (a === 'got' || a === 'miss') { if (!fc.revealed) return; fc.results[fc.deck[fc.i].id] = a; return fcAct('next'); }
+    if (a === 'next') { if (fc.i + 1 >= fc.deck.length) { fc.done = true; } else { fc.i++; fc.revealed = false; } return fcRender(); }
+    if (a === 'prev') { if (fc.i > 0) { fc.i--; fc.revealed = false; fcRender(); } return; }
+    if (a === 'end') { fc.done = true; return fcRender(); }
+    if (a === 'again') { fc.deck = fc.all.slice(); fc.i = 0; fc.revealed = false; fc.done = false; fc.results = {}; return fcRender(); }
+    if (a === 'missed') { const m = fc.deck.filter(c => fc.results[c.id] === 'miss'); fc.deck = m; fc.i = 0; fc.revealed = false; fc.done = false; fc.results = {}; return fcRender(); }
+    if (a === 'shuffle') { const d = fc.deck.slice(fc.i); for (let k = d.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [d[k], d[j]] = [d[j], d[k]]; } fc.deck = fc.deck.slice(0, fc.i).concat(d); fc.revealed = false; return fcRender(); }
+  }
   async function openCards(topicId, title) {
     const r = await fetch('/api/cards?scope=topic&id=' + encodeURIComponent(topicId));
     const d = await r.json();
     const cards = d.cards || [];
     document.getElementById('fc-title').textContent = title;
-    const stage = document.getElementById('fc-stage'), foot = document.getElementById('fc-foot');
-    let i = 0, revealed = false;
-    function show() {
-      if (i >= cards.length) { stage.innerHTML = '<p class="py-10 text-center text-muted-foreground">Done — ' + cards.length + ' cards reviewed.</p>'; foot.innerHTML = ''; return; }
-      revealed = false;
-      stage.innerHTML = cards[i].front_html;
-      document.getElementById('fc-progress').textContent = (i + 1) + ' / ' + cards.length;
-      foot.innerHTML = '<button id="fc-reveal" class="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground">Reveal answer · Space</button>';
-      foot.querySelector('#fc-reveal').onclick = reveal;
-    }
-    function reveal() {
-      revealed = true; stage.innerHTML = cards[i].back_html;
-      const pv = cards[i].previews || {};
-      foot.innerHTML = '<div class="grid grid-cols-4 gap-2">' +
-        [['1','Again','text-tag-orange'],['2','Hard',''],['3','Good','text-status-success'],['4','Easy','text-status-info']]
-        .map(([n,l,c]) => '<button class="fc-rate rounded-xl border py-2 text-xs hover:bg-accent" data-r="'+n+'"><div class="font-semibold '+c+'">'+l+'</div><div class="text-[10px] text-muted-foreground">'+(pv[n]||'')+'</div></button>').join('') + '</div>';
-      foot.querySelectorAll('.fc-rate').forEach(b => b.onclick = () => rate(+b.dataset.r));
-    }
-    async function rate(n) {
-      try { await fetch('/api/review', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: cards[i].id, rating: n})}); } catch(e){}
-      i++; show();
-    }
-    fcModal._reveal = () => { if (!revealed) reveal(); };
-    fcModal._rate = (n) => { if (revealed) rate(n); };
-    if (!cards.length) { stage.innerHTML = '<p class="py-10 text-center text-muted-foreground">No cards for this topic.</p>'; foot.innerHTML=''; }
-    else show();
-    fcModal.classList.remove('hidden'); fcModal.classList.add('flex');
+    fc = {all: cards, deck: cards.slice(), i: 0, revealed: false, done: false, results: {}};
+    fcRender();
+    fcModal.classList.remove('hidden'); fcModal.setAttribute('aria-hidden', 'false');
+    document.documentElement.classList.add('fc-open');
+    fcModal.querySelector('.fc-dialog').focus?.();
+  }
+  window.tempuOpenCards = openCards;
+  if (fcModal) {
+    fcModal.addEventListener('click', e => {
+      if (e.target === fcModal) return fcClose();                       // click outside the dialog
+      const b = e.target.closest('[data-fc]'); if (b && !b.disabled) return fcAct(b.dataset.fc);
+      if (e.target.closest('#fc-close')) return fcClose();
+      if (e.target.closest('#fc-end')) return fcAct('end');
+      if (e.target.closest('#fc-shuffle')) return fcAct('shuffle');
+      if (e.target.closest('#fc-restart')) return fcAct('again');
+    });
   }
   document.querySelectorAll('.topic-cards-btn').forEach(b => b.addEventListener('click', () => openCards(b.dataset.topic, b.dataset.title)));
-  document.getElementById('fc-close')?.addEventListener('click', () => { fcModal.classList.add('hidden'); fcModal.classList.remove('flex'); });
   document.addEventListener('keydown', e => {
-    if (fcModal && !fcModal.classList.contains('hidden')) {
-      if (e.key === ' ') { e.preventDefault(); fcModal._reveal?.(); }
-      else if (['1','2','3','4'].includes(e.key)) fcModal._rate?.(+e.key);
-      else if (e.key === 'Escape') { fcModal.classList.add('hidden'); fcModal.classList.remove('flex'); }
-    }
+    if (!fc || !fcModal || fcModal.classList.contains('hidden')) return;
+    if (/INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if (e.key === ' ') { e.preventDefault(); if (!fc.done && !fc.revealed) fcAct('reveal'); }
+    else if (e.key === '1') fcAct('miss');
+    else if (e.key === '2') fcAct('got');
+    else if (e.key === 'ArrowRight') { e.preventDefault(); fcAct('next'); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); fcAct('prev'); }
+    else if (e.key === 'Escape') { e.stopPropagation(); fcClose(); }
   });
 
-  // ---- image lightbox (modern look only) ----
-  let zoomBackdrop = null;
-  function closeZoom() {
-    document.querySelectorAll('img.modern-zoomed').forEach(i => i.classList.remove('modern-zoomed'));
-    if (zoomBackdrop) { zoomBackdrop.remove(); zoomBackdrop = null; }
+  // ---- image lightbox: click any image in the reader to open it full-screen ----
+  const lb = document.createElement('div');
+  lb.id = 'img-lightbox';
+  lb.innerHTML = '<button class="lb-close" aria-label="Close">&times;</button><img alt=""><p class="lb-cap"></p>';
+  document.body.appendChild(lb);
+  const lbImg = lb.querySelector('img'), lbCap = lb.querySelector('.lb-cap');
+  let lbScale = 1;
+  function openLightbox(img) {
+    lbImg.src = img.currentSrc || img.src;
+    const fig = img.closest('figure');
+    const cap = fig && fig.querySelector('figcaption');
+    lbCap.textContent = cap ? cap.textContent : '';
+    lbScale = 1; lbImg.style.transform = '';
+    lb.classList.add('open');
+    document.documentElement.style.overflow = 'hidden';
   }
-  document.querySelectorAll('.bn-editor img').forEach(img => img.addEventListener('click', () => {
-    if (!document.documentElement.classList.contains('look-modern')) return;
-    if (img.classList.contains('modern-zoomed')) { closeZoom(); return; }
-    closeZoom();
-    zoomBackdrop = document.createElement('div');
-    zoomBackdrop.className = 'modern-zoom-backdrop';
-    zoomBackdrop.addEventListener('click', closeZoom);
-    document.body.appendChild(zoomBackdrop);
-    img.classList.add('modern-zoomed');
-  }));
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeZoom(); });
+  function closeLightbox() {
+    lb.classList.remove('open');
+    document.documentElement.style.overflow = '';
+  }
+  window.tempuOpenLightbox = openLightbox;
+  document.addEventListener('click', e => {
+    if (document.documentElement.classList.contains('editing-content') && e.target.closest('.topic-article.is-editing')) return;
+    const frame = e.target.closest('.bn-editor [data-content-type=image], .bn-editor img:not(.ProseMirror-separator)');
+    if (!frame) return;
+    const img = frame.tagName === 'IMG' ? frame : frame.querySelector('img.bn-visual-media, img');
+    if (!img) return;
+    e.preventDefault(); e.stopPropagation();
+    openLightbox(img);
+  }, true);
+  lb.addEventListener('click', e => { if (e.target !== lbImg) closeLightbox(); });
+  lbImg.addEventListener('click', e => {           // click the open image to zoom in/out
+    lbScale = lbScale === 1 ? 2 : 1;
+    lbImg.style.transform = lbScale === 1 ? '' : 'scale(2)';
+    lbImg.style.cursor = lbScale === 1 ? 'zoom-in' : 'zoom-out';
+  });
+  lb.addEventListener('wheel', e => {
+    if (!lb.classList.contains('open')) return;
+    e.preventDefault();
+    lbScale = Math.min(5, Math.max(1, lbScale * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+    lbImg.style.transform = lbScale === 1 ? '' : `scale(${lbScale})`;
+  }, {passive: false});
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && lb.classList.contains('open')) closeLightbox(); });
 
-  // scroll to hash topic
-  if (location.hash.startsWith('#topic-')) {
-    const el = document.getElementById(location.hash.slice(1));
-    if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+  // ================= cross-reference links + split view =================
+  const isEmbed = document.documentElement.classList.contains('tempu-embed');
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+  function toast(msg) {
+    let t = document.getElementById('tempu-toast');
+    if (!t) { t = document.createElement('div'); t.id = 'tempu-toast'; document.body.appendChild(t); }
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 3200);
   }
+  window.tempuToast = toast;
+
+  function findTarget(hash) {
+    if (!hash || hash.length < 2) return null;
+    const h = decodeURIComponent(hash.slice(1));
+    if (h.startsWith('topic-')) return document.getElementById(h);
+    const id = h.startsWith('block-') ? h.slice(6) : h;
+    if (!UUID.test(id)) return null;
+    return document.querySelector(`.bn-block-outer[data-id="${id}"]`) || document.getElementById('topic-' + id);
+  }
+  function scrollToTarget(hash, smooth = true) {
+    const el = findTarget(hash);
+    if (!el) return false;
+    const art = el.closest('.topic-article');
+    if (art && art.querySelector('.topic-body.hidden')) setCollapsed(art, false);
+    // open any collapsed toggle blocks that contain the target
+    let p = el.parentElement;
+    while (p) {
+      if (p.matches && p.matches('.bn-block') ) {
+        const tw = p.querySelector(':scope > .bn-block-content .bn-toggle-wrapper[data-show-children="false"]');
+        if (tw) { tw.setAttribute('data-show-children', 'true'); }
+      }
+      p = p.parentElement;
+    }
+    el.scrollIntoView({behavior: smooth ? 'smooth' : 'auto', block: el.classList.contains('topic-article') ? 'start' : 'center'});
+    if (!el.classList.contains('topic-article')) {
+      el.classList.remove('xref-flash'); void el.offsetWidth; el.classList.add('xref-flash');
+    }
+    return true;
+  }
+  window.tempuScrollToTarget = scrollToTarget;
+
+  // --- split pane (left: this section, right: the linked section) ---
+  function buildSplit() {
+    let pane = document.getElementById('split-pane');
+    if (pane) return pane;
+    const root = document.querySelector('.reader-root');
+    const wrap = document.createElement('div');
+    wrap.id = 'split-wrap';
+    root.parentNode.insertBefore(wrap, root);
+    wrap.appendChild(root);
+    pane = document.createElement('aside');
+    pane.id = 'split-pane';
+    pane.innerHTML = `
+      <div class="split-head">
+        <div class="min-w-0"><p class="split-kicker">Split view</p><p class="split-title truncate">Loading…</p></div>
+        <div class="split-actions">
+          <button data-split="swap" title="Swap primary and secondary sections" aria-label="Swap primary and secondary sections"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg></button>
+          <button data-split="open" title="Open this section in a new tab and close the split view" aria-label="Open in new tab"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+          <button data-split="close" title="Close split view" aria-label="Close split view"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
+      </div>
+      <iframe class="split-frame" title="Linked section"></iframe>`;
+    wrap.appendChild(pane);
+    const frame = pane.querySelector('iframe');
+    frame.addEventListener('load', () => {
+      try {
+        const d = frame.contentDocument;
+        pane.querySelector('.split-title').textContent = (d.querySelector('.reader-root h1')?.textContent || d.title || '').trim();
+      } catch (e) { /* ignore */ }
+    });
+    pane.addEventListener('click', e => {
+      const b = e.target.closest('[data-split]'); if (!b) return;
+      const sid = pane.dataset.section;
+      if (b.dataset.split === 'close') closeSplit();
+      else if (b.dataset.split === 'open') { window.open('/sections/' + sid + (pane.dataset.hash || ''), '_blank'); closeSplit(); }
+      else if (b.dataset.split === 'swap') { location.href = '/sections/' + sid + '?split=' + sectionId; }
+    });
+    return pane;
+  }
+  function setUrlSplit(sid) {
+    const u = new URL(location.href);
+    u.searchParams.delete('splitSectionId');
+    if (sid) u.searchParams.set('split', sid); else u.searchParams.delete('split');
+    history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
+  }
+  function openSplit(sid, hash) {
+    const pane = buildSplit();
+    pane.dataset.section = sid; pane.dataset.hash = hash || '';
+    const frame = pane.querySelector('iframe');
+    const src = '/sections/' + sid + '?embed=1' + (hash || '');
+    // same section already showing -> just scroll inside it
+    if (frame.dataset.section === sid && frame.contentWindow && frame.contentWindow.tempuScrollToTarget) {
+      frame.contentWindow.tempuScrollToTarget(hash || '');
+    } else {
+      frame.dataset.section = sid;
+      frame.src = src;
+    }
+    document.documentElement.classList.add('split-open');
+    setUrlSplit(sid);
+  }
+  function closeSplit() {
+    const wrap = document.getElementById('split-wrap'); if (!wrap) return;
+    const root = wrap.querySelector('.reader-root');
+    wrap.parentNode.insertBefore(root, wrap); wrap.remove();
+    document.documentElement.classList.remove('split-open');
+    setUrlSplit(null);
+  }
+
+  async function openXref(a) {
+    const tid = a.dataset.refTopic, bid = a.dataset.refBlock;
+    const hash = bid ? '#block-' + bid : '#topic-' + tid;
+    let info;
+    try { info = await fetch('/api/xref/' + tid).then(r => r.json()); } catch (e) { info = {found: false}; }
+    if (!info.found) {
+      a.classList.add('is-missing');
+      toast('“' + a.textContent.trim() + '” isn’t in your offline library yet.');
+      return;
+    }
+    if (info.section_id === sectionId) { scrollToTarget(hash); return; }
+    if (isEmbed && window.parent !== window) {
+      window.parent.postMessage({type: 'tempu-split', section: info.section_id, hash}, location.origin);
+      return;
+    }
+    openSplit(info.section_id, hash);
+  }
+  document.addEventListener('click', e => {
+    const a = e.target.closest('.bn-editor a.tempu-xref');
+    if (!a) return;
+    if (a.closest('.topic-article.is-editing')) { e.preventDefault(); return; }
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;   // new tab: server resolves /r/...
+    e.preventDefault();
+    openXref(a);
+  });
+  window.addEventListener('message', e => {
+    if (e.origin !== location.origin || !e.data || e.data.type !== 'tempu-split') return;
+    if (e.data.section === sectionId) scrollToTarget(e.data.hash); else openSplit(e.data.section, e.data.hash);
+  });
+
+  // initial state: ?split=<sectionId> (or the live app's ?splitSectionId=)
+  {
+    const q = new URLSearchParams(location.search);
+    const sid = q.get('split') || q.get('splitSectionId');
+    if (sid && !isEmbed && UUID.test(sid)) openSplit(sid, '');
+  }
+  // scroll to #topic-… / #block-… / #<blockId>
+  if (location.hash) setTimeout(() => scrollToTarget(location.hash, false), 60);
 })();
