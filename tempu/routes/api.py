@@ -303,6 +303,14 @@ def deck_delete(deck_id):
 
 
 # ------------------------------------------------------------- collections
+@bp.route("/collections", methods=["GET"])
+def list_collections():
+    rows = g.db.execute(
+        "SELECT id, title, item_count FROM collections WHERE kind='personal' "
+        "ORDER BY created_at DESC").fetchall()
+    return jsonify({"collections": [dict(r) for r in rows]})
+
+
 @bp.route("/collections", methods=["POST"])
 def create_collection():
     d = request.get_json(force=True)

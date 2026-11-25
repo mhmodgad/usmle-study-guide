@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en" class="__variable_0cafb8 __variable_c5437d h-full antialiased {{ theme }}" data-mantine-color-scheme="{{ theme }}" style="color-scheme: {{ theme }};">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Annotate · {{ topic.title }} | TEMP-U</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/overrides.css') }}">
+</head>
+<body class="min-h-full bg-background font-sans text-foreground">
+{% set cs = 'dark' if theme == 'dark' else 'light' %}
+<div class="sticky top-0 z-40 flex items-center gap-3 border-b bg-background/90 px-4 py-2 backdrop-blur">
+  <a href="{{ back_href }}" class="inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-accent">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>Back
+  </a>
+  <span class="min-w-0 flex-1 truncate text-sm font-semibold">Annotate · {{ topic.title }}</span>
+  <div class="flex items-center gap-1" id="an-tools">
+    <button class="an-color size-7 rounded-full border-2 border-transparent" style="background:#ef4444" data-color="#ef4444" title="Red"></button>
+    <button class="an-color size-7 rounded-full border-2 border-transparent" style="background:#3b82f6" data-color="#3b82f6" title="Blue"></button>
+    <button class="an-color size-7 rounded-full border-2 border-transparent" style="background:#22c55e" data-color="#22c55e" title="Green"></button>
+    <button class="an-color size-7 rounded-full border-2 border-transparent" style="background:#eab308" data-color="#eab308" title="Yellow"></button>
+    <span class="mx-1 h-6 w-px bg-border"></span>
+    <button id="an-eraser" class="rounded-md p-2 hover:bg-accent" title="Eraser"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg></button>
+    <input id="an-width" type="range" min="1" max="12" value="3" class="w-20" title="Pen size">
+    <button id="an-undo" class="rounded-md p-2 hover:bg-accent" title="Undo"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg></button>
+    <button id="an-clear" class="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Clear</button>
+  </div>
+</div>
+
+<div class="relative mx-auto w-full max-w-4xl px-4 py-8" id="an-wrap">
+  <h1 class="mb-4 text-xl font-bold tracking-tight">{{ topic.title }}</h1>
+  <div id="an-content" class="mantine-editor-container custom_documentTheme__THGUE">
+    <div class="bn-root bn-container {{ cs }} bn-mantine" data-color-scheme="{{ cs }}" data-mantine-color-scheme="{{ cs }}">
+      <div class="tiptap ProseMirror bn-editor bn-default-styles">
+        <div class="bn-block-group" data-node-type="blockGroup">{{ topic.document_html|safe }}</div>
+      </div>
+    </div>
+  </div>
+  <canvas id="an-canvas" class="absolute left-0 top-0 touch-none" style="z-index:30"></canvas>
+</div>
+
+<script>
+(() => {
+  const wrap = document.getElementById('an-wrap');
+  const canvas = document.getElementById('an-canvas');
+  const ctx = canvas.getContext('2d');
+  let color = '#ef4444', width = 3, eraser = false, drawing = false, last = null;
+  const strokes = [];           // for undo: each = {color,width,eraser,pts[]}
+  let cur = null;
+
+  function fit() {
+    const r = wrap.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = r.width * dpr; canvas.height = wrap.scrollHeight * dpr;
+    canvas.style.width = r.width + 'px'; canvas.style.height = wrap.scrollHeight + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    redraw();
+  }
+  function redraw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (const s of strokes) drawStroke(s);
+  }
+  function drawStroke(s) {
+    if (s.pts.length < 1) return;
+    ctx.globalCompositeOperation = s.eraser ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = s.color; ctx.lineWidth = s.eraser ? s.width * 4 : s.width;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(s.pts[0].x, s.pts[0].y);
+    for (let i = 1; i < s.pts.length; i++) ctx.lineTo(s.pts[i].x, s.pts[i].y);
+    ctx.stroke();
+  }
+  function pos(e) {
+    const r = canvas.getBoundingClientRect();
+    return {x: (e.touches ? e.touches[0].clientX : e.clientX) - r.left,
+            y: (e.touches ? e.touches[0].clientY : e.clientY) - r.top};
+  }
+  function start(e) { drawing = true; cur = {color, width, eraser, pts: [pos(e)]}; strokes.push(cur); e.preventDefault(); }
+  function move(e) { if (!drawing) return; cur.pts.push(pos(e)); redraw(); e.preventDefault(); }
+  function end() { drawing = false; cur = null; }
+  canvas.addEventListener('mousedown', start);
+  canvas.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', end);
+  canvas.addEventListener('touchstart', start, {passive: false});
+  canvas.addEventListener('touchmove', move, {passive: false});
+  window.addEventListener('touchend', end);
+
+  document.querySelectorAll('.an-color').forEach(b => b.addEventListener('click', () => {
+    color = b.dataset.color; eraser = false;
+    document.querySelectorAll('.an-color').forEach(x => x.style.borderColor = 'transparent');
+    b.style.borderColor = 'var(--foreground)';
+    document.getElementById('an-eraser').classList.remove('bg-accent');
+  }));
+  document.getElementById('an-eraser').addEventListener('click', e => { eraser = true; e.currentTarget.classList.add('bg-accent'); });
+  document.getElementById('an-width').addEventListener('input', e => width = +e.target.value);
+  document.getElementById('an-undo').addEventListener('click', () => { strokes.pop(); redraw(); });
+  document.getElementById('an-clear').addEventListener('click', () => { strokes.length = 0; redraw(); });
+
+  document.querySelector('.an-color').style.borderColor = 'var(--foreground)';
+  window.addEventListener('load', fit);
+  window.addEventListener('resize', fit);
+  setTimeout(fit, 300);
+})();
+</script>
+</body>
+</html>

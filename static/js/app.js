@@ -26,6 +26,20 @@
     else document.exitFullscreen?.();
   });
 
+  // ---- look (classic / modern) ----
+  function applyLook(look) {
+    root.classList.toggle('look-modern', look === 'modern');
+    document.querySelectorAll('.pm-look').forEach(b =>
+      b.classList.toggle('bg-background', b.dataset.look === look));
+  }
+  function setLook(look) {
+    applyLook(look);
+    try { localStorage.setItem('tempu-look', look); } catch (e) {}
+    fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({look})}).catch(() => {});
+  }
+  applyLook(root.classList.contains('look-modern') ? 'modern' : 'classic');
+  document.querySelectorAll('.pm-look').forEach(b => b.addEventListener('click', () => setLook(b.dataset.look)));
+
   // ---- sidebar toggle (expand/collapse on desktop, overlay on mobile) ----
   const mqDesktop = window.matchMedia('(min-width: 768px)');
   function setSidebar(open) {

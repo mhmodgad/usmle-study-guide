@@ -36,6 +36,12 @@ You need **two** things from your current machine:
 > Then you don't need `local\content` at all — the database already contains the
 > text, and `assets` provides the pictures/videos.
 
+> **Copying the whole folder is fine.** If your copy happens to include a
+> `.venv` or `__pycache__` from your Mac/Linux machine, don't worry —
+> `setup-windows.bat` detects a non-Windows `.venv` and rebuilds it, and stale
+> `.pyc` files are ignored. You do **not** have to delete anything before
+> copying.
+
 ---
 
 ## Where to put media / images / videos

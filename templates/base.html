@@ -6,7 +6,8 @@
 <title>{% block title %}TEMP-U{% endblock %}</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/overrides.css') }}">
-<script>try{var _sb=localStorage.getItem('tempu-sidebar');if(_sb!=='0'&&window.matchMedia('(min-width: 768px)').matches)document.documentElement.classList.add('sb-open');}catch(e){}</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/modern.css') }}">
+<script>try{var _sb=localStorage.getItem('tempu-sidebar');if(_sb!=='0'&&window.matchMedia('(min-width: 768px)').matches)document.documentElement.classList.add('sb-open');var _lk=localStorage.getItem('tempu-look')||'{{ settings.get("look","classic") }}';if(_lk==='modern')document.documentElement.classList.add('look-modern');}catch(e){}</script>
 </head>
 <body class="min-h-full flex flex-col font-sans">
 <div data-app-shell="true" class="relative flex min-h-screen flex-col">
@@ -50,6 +51,13 @@
     <div class="flex gap-1 rounded-lg bg-muted p-0.5">
       <button data-theme="light" class="pm-theme flex-1 rounded-md px-2 py-1 text-xs font-medium">Light</button>
       <button data-theme="dark" class="pm-theme flex-1 rounded-md px-2 py-1 text-xs font-medium">Dark</button>
+    </div>
+  </div>
+  <div class="border-b px-4 py-2">
+    <p class="mb-1.5 text-xs font-medium text-muted-foreground">Look</p>
+    <div class="flex gap-1 rounded-lg bg-muted p-0.5">
+      <button data-look="classic" class="pm-look flex-1 rounded-md px-2 py-1 text-xs font-medium">Classic</button>
+      <button data-look="modern" class="pm-look flex-1 rounded-md px-2 py-1 text-xs font-medium">Modern</button>
     </div>
   </div>
   <button id="pm-notifications" class="block w-full px-4 py-2 text-left text-sm hover:bg-accent">Notifications</button>

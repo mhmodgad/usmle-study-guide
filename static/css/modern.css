@@ -1,0 +1,282 @@
+/* =========================================================================
+   MODERN LOOK  — an optional, more polished presentation layer.
+   Toggled via <html class="look-modern">. Classic look = these rules off.
+   It ONLY restyles presentation (type, spacing, images, video, cards,
+   popovers). It never changes content order or structure.
+   ========================================================================= */
+
+/* ---------- reading column & typography ---------- */
+html.look-modern .bn-editor {
+  font-size: 1.0625rem;         /* ~17px, comfortable reading */
+  line-height: 1.55;            /* tighter, balanced spacing */
+  letter-spacing: 0.001em;
+}
+html.look-modern .bn-editor p,
+html.look-modern .bn-editor li { margin-block: 0.28rem; }
+html.look-modern .bn-editor h1,
+html.look-modern .bn-editor h2,
+html.look-modern .bn-editor h3 {
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin-top: 1.4em;
+  margin-bottom: 0.5em;
+}
+html.look-modern .bn-editor ul,
+html.look-modern .bn-editor ol { margin-block: 0.4rem; }
+html.look-modern .bn-editor a { text-underline-offset: 3px; }
+
+/* ---------- images: rounded, framed, centered, zoomable ---------- */
+html.look-modern .bn-editor img {
+  border-radius: 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 18px 40px -24px rgba(0,0,0,.45);
+  max-height: 32rem;
+  object-fit: contain;
+  background: color-mix(in oklab, var(--muted) 40%, transparent);
+  margin-inline: auto;
+  cursor: zoom-in;
+  transition: transform .25s ease, box-shadow .25s ease;
+}
+html.look-modern .bn-editor img:hover {
+  box-shadow: 0 2px 6px rgba(0,0,0,.08), 0 26px 60px -28px rgba(0,0,0,.55);
+}
+/* lightbox when an image is clicked (class toggled by reader.js) */
+html.look-modern img.modern-zoomed {
+  position: fixed; inset: 0; z-index: 90; margin: auto;
+  max-width: 94vw; max-height: 92vh; cursor: zoom-out;
+  box-shadow: 0 30px 80px -10px rgba(0,0,0,.7);
+}
+.modern-zoom-backdrop { position: fixed; inset: 0; z-index: 89; background: rgba(0,0,0,.72); backdrop-filter: blur(3px); }
+
+/* ---------- video: clean 16:9 frame ---------- */
+html.look-modern .bn-editor iframe,
+html.look-modern .bn-editor video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  height: auto;
+  border-radius: 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 20px 48px -26px rgba(0,0,0,.5);
+  background: #000;
+}
+
+/* ---------- tables: refined ---------- */
+html.look-modern .bn-editor table {
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--border) 70%, transparent);
+}
+html.look-modern .bn-editor th {
+  background: color-mix(in oklab, var(--muted) 55%, transparent);
+  font-weight: 600;
+}
+html.look-modern .bn-editor td,
+html.look-modern .bn-editor th { padding: 0.5rem 0.75rem; }
+
+/* ---------- topic cards: elevated, calm ---------- */
+html.look-modern .topic-article {
+  border-radius: 1.25rem;
+  border-color: color-mix(in oklab, var(--border) 65%, transparent);
+  background:
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--card) 85%, var(--background)) 0%,
+      color-mix(in oklab, var(--card) 60%, var(--background)) 100%);
+  box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 18px 48px -30px rgba(0,0,0,.4);
+  transition: box-shadow .3s ease, border-color .3s ease, transform .3s ease;
+  overflow: hidden;
+}
+html.look-modern .topic-article:hover {
+  border-color: color-mix(in oklab, var(--primary) 28%, var(--border));
+  box-shadow: 0 2px 4px rgba(0,0,0,.05), 0 26px 64px -32px rgba(0,0,0,.5);
+}
+/* a subtle accent rail on the topic header */
+html.look-modern .topic-article > div:first-child {
+  padding: 1.05rem 1.5rem;
+  position: relative;
+}
+html.look-modern .topic-article > div:first-child::before {
+  content: ""; position: absolute; left: 0; top: 0.9rem; bottom: 0.9rem; width: 3px;
+  border-radius: 999px;
+  background: linear-gradient(var(--primary), color-mix(in oklab, var(--primary) 40%, transparent));
+  opacity: .55;
+}
+html.look-modern .topic-article h2 { font-size: 1.2rem; letter-spacing: -0.01em; }
+html.look-modern .topic-body { padding-inline: 1.75rem; }
+
+/* ---------- section banner: taller, richer ---------- */
+html.look-modern .reader-banner { height: 15rem; border-radius: 1.5rem; }
+
+/* ---------- highlights: soft rounded wash ---------- */
+html.look-modern .tempu-highlight {
+  border-radius: 0.3rem;
+  padding: 0.05em 0.18em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+html.look-modern .tempu-inline-anchor { border-bottom-style: dotted; border-bottom-width: 2px; }
+
+/* ---------- premium popovers / toolbars / modals ---------- */
+html.look-modern #selection-toolbar,
+html.look-modern #inline-note-pop,
+html.look-modern #ann-pop,
+html.look-modern #topic-actions-menu,
+html.look-modern #toc-panel,
+html.look-modern .crumb-menu,
+html.look-modern #profile-menu,
+html.look-modern #notif-panel,
+html.look-modern #fc-modal > div,
+html.look-modern #coll-modal > div,
+html.look-modern #ann-panel {
+  border-radius: 1rem;
+  border-color: color-mix(in oklab, var(--border) 60%, transparent);
+  box-shadow: 0 12px 48px -12px rgba(0,0,0,.5);
+  backdrop-filter: blur(10px);
+}
+html.look-modern #selection-toolbar { border-radius: 999px; padding: 0.3rem 0.4rem; }
+html.look-modern #selection-toolbar .hl-swatch { width: 1.35rem; height: 1.35rem; transition: transform .15s; }
+html.look-modern #selection-toolbar .hl-swatch:hover { transform: scale(1.18); }
+
+/* ---------- annotations panel items ---------- */
+html.look-modern #ann-panel { max-width: 24rem; }
+html.look-modern .ann-item { border-radius: 0.9rem; transition: border-color .2s, transform .2s, box-shadow .2s; }
+html.look-modern .ann-item:hover { transform: translateY(-1px); box-shadow: 0 10px 24px -16px rgba(0,0,0,.5); }
+
+/* ---------- general chrome polish (safe, shadow/radius only) ---------- */
+html.look-modern .shadow-sm { box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 12px 32px -24px rgba(0,0,0,.4) !important; }
+html.look-modern header[data-app-header] { backdrop-filter: blur(14px); }
+html.look-modern [data-app-sidebar] { backdrop-filter: blur(8px); }
+
+/* smooth look transitions */
+html.look-modern .topic-article,
+html.look-modern .bn-editor img,
+html.look-modern .ann-item { will-change: transform; }
+
+/* ---------- Modern: docked annotations / notes sidebar (xl screens) ---------- */
+@media (min-width: 1280px) {
+  html.look-modern.ann-docked #ann-panel {
+    display: flex !important;
+    box-shadow: -12px 0 40px -24px rgba(0,0,0,.5);
+  }
+  html.look-modern.ann-docked .reader-root {
+    margin-left: 2rem;
+    margin-right: 26rem;      /* 24rem panel + 2rem gap */
+    max-width: none;
+    width: auto;
+  }
+  html.look-modern #ann-panel { width: 24rem; }
+  /* keep the sticky header controls clear of the docked panel */
+  html.look-modern.ann-docked [data-app-header] { padding-right: 25rem; }
+}
+/* refined header + body for the docked panel */
+html.look-modern #ann-panel .ann-item {
+  background: color-mix(in oklab, var(--card) 80%, var(--background));
+  border-color: color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+/* =========================================================================
+   Modern: refined content colour system (presentation only — same text/order)
+   The source document colours section headings with data-background-color and
+   emphasises text with data-style-type="backgroundColor"/"textColor". Classic
+   fills these as flat blocks (vivid bars in dark mode). Modern turns each into
+   a calm, accessible accent: a tinted panel + a coloured left rail + readable
+   coloured heading text, so sections read as a clean, scannable hierarchy.
+   ========================================================================= */
+
+/* per-colour accent token (one strong, accessible hue per named colour) */
+html.look-modern .bn-editor [data-background-color=blue],
+html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=blue],
+html.look-modern .bn-editor [data-style-type=textColor][data-value=blue]   { --mc: #3b82f6; }
+html.look-modern .bn-editor [data-background-color=green],
+html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=green],
+html.look-modern .bn-editor [data-style-type=textColor][data-value=green]  { --mc: #16a34a; }
+html.look-modern .bn-editor [data-background-color=red],
+html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=red],
+html.look-modern .bn-editor [data-style-type=textColor][data-value=red]    { --mc: #ef4444; }
+html.look-modern .bn-editor [data-background-color=orange],
+html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=orange],
+html.look-modern .bn-editor [data-style-type=textColor][data-value=orange] { --mc: #f97316; }
+html.look-modern .bn-editor [data-background-color=yellow],
+html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=yellow],
+html.look-modern .bn-editor [data-style-type=textColor][data-value=yellow] { --mc: #d9a406; }
+html.look-modern .bn-editor [data-background-color=pink],
+html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=pink],
+html.look-modern .bn-editor [data-style-type=textColor][data-value=pink]   { --mc: #ec4899; }
+html.look-modern .bn-editor [data-background-color=purple],
+html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=purple],
+html.look-modern .bn-editor [data-style-type=textColor][data-value=purple] { --mc: #8b5cf6; }
+html.look-modern .bn-editor [data-background-color=brown],
+html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=brown],
+html.look-modern .bn-editor [data-style-type=textColor][data-value=brown]  { --mc: #b45309; }
+html.look-modern .bn-editor [data-background-color=gray],
+html.look-modern .bn-editor [data-style-type=backgroundColor][data-value=gray],
+html.look-modern .bn-editor [data-style-type=textColor][data-value=gray]   { --mc: #6b7280; }
+
+/* section-heading blocks -> calm tinted panel with a coloured rail */
+html.look-modern .bn-editor [data-background-color] {
+  background: color-mix(in oklab, var(--mc, var(--primary)) 14%, var(--card)) !important;
+  border: 0 !important;
+  border-left: 3px solid var(--mc, var(--primary)) !important;
+  outline: 0 !important;
+  border-radius: 0.7rem;
+  padding: 0.55rem 1rem !important;
+  margin-block: 1.1rem 0.6rem;
+  box-shadow: 0 10px 30px -24px rgba(0,0,0,.4);
+}
+/* ensure no child keeps the old vivid fill */
+html.look-modern .bn-editor [data-background-color] > *,
+html.look-modern .bn-editor [data-background-color] [data-style-type=backgroundColor] {
+  background: transparent !important;
+}
+/* the source CSS also fills the WRAPPER .bn-block with the vivid colour, which
+   framed the panel — make the wrapper transparent so only the tinted panel shows */
+html.look-modern .bn-editor .bn-block:has(> .bn-block-content[data-background-color]) {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+/* heading text inside a coloured block: readable, in the accent hue */
+html.look-modern .bn-editor [data-background-color],
+html.look-modern .bn-editor [data-background-color] * {
+  color: color-mix(in oklab, var(--mc, var(--primary)) 62%, var(--foreground)) !important;
+  font-weight: 700;
+}
+/* size by heading level */
+html.look-modern .bn-editor [data-background-color][data-level="1"] { font-size: 1.5rem; }
+html.look-modern .bn-editor [data-background-color][data-level="2"] { font-size: 1.25rem; }
+html.look-modern .bn-editor [data-background-color][data-level="3"] { font-size: 1.1rem; }
+
+/* inline highlighted text (content's own emphasis) -> soft rounded wash */
+html.look-modern .bn-editor [data-style-type=backgroundColor] {
+  background: color-mix(in oklab, var(--mc, #d9a406) 22%, transparent) !important;
+  border-radius: 0.3rem;
+  padding: 0.02em 0.22em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+/* inline coloured text -> accessible accent hue (keeps weight) */
+html.look-modern .bn-editor [data-style-type=textColor] {
+  color: color-mix(in oklab, var(--mc, var(--foreground)) 72%, var(--foreground)) !important;
+}
+
+/* callout blocks (quote-icon panels) -> softer, rounder */
+html.look-modern .bn-editor [style*="/editor/quoteIcons/"] {
+  border-radius: 0.8rem !important;
+  box-shadow: 0 10px 30px -24px rgba(0,0,0,.4);
+}
+
+/* bullets/sub-lists: a touch more air and clearer markers */
+html.look-modern .bn-editor [data-content-type=bulletListItem] { margin-block: 0.28rem; }
+
+/* ---------- wider reader: content presentation ---------- */
+html.look-modern .topic-body { padding-inline: 2rem; }
+/* even vertical rhythm between top-level blocks */
+html.look-modern .bn-editor > .bn-block-group > .bn-block-outer { margin-block: 0.12rem; }
+/* images: use the width, stay centred and capped */
+html.look-modern .bn-editor img { max-height: 36rem; margin-block: 0.85rem; }
+/* tables fill the wider column */
+html.look-modern .bn-editor table { width: 100%; margin-block: 0.85rem; }
+/* keep plain prose to a comfortable measure while letting media/sections span full */
+html.look-modern .bn-editor [data-content-type=paragraph],
+html.look-modern .bn-editor [data-content-type=bulletListItem] .bn-inline-content,
+html.look-modern .bn-editor [data-content-type=numberedListItem] .bn-inline-content {
+  max-width: 68ch;
+}

@@ -42,7 +42,13 @@ if (-not $py) {
 Write-Host "Using Python command: $py" -ForegroundColor Green
 
 # --- 2. Virtual environment --------------------------------------------------
-if (-not (Test-Path ".venv")) {
+# A .venv copied from macOS/Linux has bin/ instead of Scripts\ and won't work on
+# Windows, so rebuild it unless a valid Windows venv is already present.
+if (-not (Test-Path ".venv\Scripts\python.exe")) {
+    if (Test-Path ".venv") {
+        Write-Host "`nFound a non-Windows .venv - removing and recreating it..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force ".venv"
+    }
     Write-Host "`nCreating virtual environment (.venv)..."
     Invoke-Expression "$py -m venv .venv"
 }

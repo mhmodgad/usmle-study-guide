@@ -248,11 +248,30 @@
   }
   function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
   const annToggle = document.getElementById('annotations-toggle');
+  const isModern = () => document.documentElement.classList.contains('look-modern');
+  function setDocked(on) {
+    document.documentElement.classList.toggle('ann-docked', on);
+    panel.classList.toggle('hidden', !on); panel.classList.toggle('flex', on);
+    try { localStorage.setItem('tempu-ann-docked', on ? '1' : '0'); } catch (e) {}
+  }
   if (annToggle) annToggle.addEventListener('click', () => {
-    const open = panel.classList.contains('hidden');
-    panel.classList.toggle('hidden', !open); panel.classList.toggle('flex', open);
+    if (isModern() && window.matchMedia('(min-width: 1280px)').matches) {
+      setDocked(!document.documentElement.classList.contains('ann-docked'));
+    } else {
+      const open = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !open); panel.classList.toggle('flex', open);
+    }
   });
-  document.getElementById('ann-panel-close').addEventListener('click', () => { panel.classList.add('hidden'); panel.classList.remove('flex'); });
+  document.getElementById('ann-panel-close').addEventListener('click', () => {
+    document.documentElement.classList.remove('ann-docked');
+    panel.classList.add('hidden'); panel.classList.remove('flex');
+    try { localStorage.setItem('tempu-ann-docked', '0'); } catch (e) {}
+  });
+  // restore docked sidebar in modern look on wide screens
+  try {
+    if (isModern() && localStorage.getItem('tempu-ann-docked') === '1' &&
+        window.matchMedia('(min-width: 1280px)').matches) setDocked(true);
+  } catch (e) {}
   renderPanel();
 
   // ---- collapse topics (per-topic + collapse all) ----
@@ -315,15 +334,45 @@
   actMenu?.querySelectorAll('button[data-act]').forEach(b => b.addEventListener('click', async () => {
     actMenu.classList.add('hidden');
     if (b.dataset.act === 'note') { window.TempuNoteEditor?.open(actTopic, actTitle); }
+    else if (b.dataset.act === 'annotate') { location.href = actMenu.dataset.annotateBase + actTopic + '/annotate'; }
     else if (b.dataset.act === 'copy') {
       const url = location.origin + location.pathname + '#topic-' + actTopic;
       try { await navigator.clipboard.writeText(url); } catch (e) {}
-    } else if (b.dataset.act === 'collection') {
-      const name = prompt('Save "' + actTitle + '" to which collection? (type a name)');
-      if (name) await fetch('/api/collections', {method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name, item_type: 'topic', topic_id: actTopic})}).catch(() => {});
-    }
+    } else if (b.dataset.act === 'collection') { openCollectionPicker(actTopic, actTitle); }
   }));
+
+  // ---- save-to-collection picker ----
+  const collModal = document.getElementById('coll-modal');
+  let collTopic = null;
+  async function renderCollections() {
+    const list = document.getElementById('coll-list');
+    const d = await (await fetch('/api/collections')).json();
+    const cols = d.collections || [];
+    list.innerHTML = cols.length ? cols.map(c =>
+      `<button class="coll-pick flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" data-id="${c.id}">
+         <span class="truncate">${escapeHtml(c.title)}</span><span class="text-xs text-muted-foreground">${c.item_count} items</span></button>`
+    ).join('') : '<p class="px-3 py-4 text-center text-sm text-muted-foreground">No collections yet — create one below.</p>';
+    list.querySelectorAll('.coll-pick').forEach(el => el.addEventListener('click', () => addToCollection(el.dataset.id)));
+  }
+  async function addToCollection(cid) {
+    await fetch('/api/collections/' + cid + '/items', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({item_type: 'topic', topic_id: collTopic})}).catch(() => {});
+    collModal.classList.add('hidden'); collModal.classList.remove('flex');
+  }
+  function openCollectionPicker(topicId, title) {
+    collTopic = topicId;
+    document.getElementById('coll-sub').textContent = 'Topic: ' + title;
+    document.getElementById('coll-new').value = '';
+    renderCollections();
+    collModal.classList.remove('hidden'); collModal.classList.add('flex');
+  }
+  document.getElementById('coll-close')?.addEventListener('click', () => { collModal.classList.add('hidden'); collModal.classList.remove('flex'); });
+  document.getElementById('coll-create')?.addEventListener('click', async () => {
+    const title = document.getElementById('coll-new').value.trim();
+    if (!title) return;
+    const r = await (await fetch('/api/collections', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({title})})).json();
+    if (r.id) await addToCollection(r.id);
+  });
 
   // ---- per-topic flashcards dialog ----
   const fcModal = document.getElementById('fc-modal');
@@ -369,6 +418,24 @@
       else if (e.key === 'Escape') { fcModal.classList.add('hidden'); fcModal.classList.remove('flex'); }
     }
   });
+
+  // ---- image lightbox (modern look only) ----
+  let zoomBackdrop = null;
+  function closeZoom() {
+    document.querySelectorAll('img.modern-zoomed').forEach(i => i.classList.remove('modern-zoomed'));
+    if (zoomBackdrop) { zoomBackdrop.remove(); zoomBackdrop = null; }
+  }
+  document.querySelectorAll('.bn-editor img').forEach(img => img.addEventListener('click', () => {
+    if (!document.documentElement.classList.contains('look-modern')) return;
+    if (img.classList.contains('modern-zoomed')) { closeZoom(); return; }
+    closeZoom();
+    zoomBackdrop = document.createElement('div');
+    zoomBackdrop.className = 'modern-zoom-backdrop';
+    zoomBackdrop.addEventListener('click', closeZoom);
+    document.body.appendChild(zoomBackdrop);
+    img.classList.add('modern-zoomed');
+  }));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeZoom(); });
 
   // scroll to hash topic
   if (location.hash.startsWith('#topic-')) {
