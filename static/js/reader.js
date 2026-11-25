@@ -4,7 +4,10 @@
   const post = (u, b) => fetch(u, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b)});
   const patch = (u, b) => fetch(u, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b)});
   const del = (u) => fetch(u, {method: 'DELETE'});
-  const HL = {yellow: '#fef08a', green: '#bbf7d0', blue: '#bfdbfe', pink: '#fbcfe8', orange: '#fed7aa'};
+  // translucent washes matching the live app (overlay, text keeps its theme color)
+  const HL = {yellow: 'rgba(255,205,75,0.24)', green: 'rgba(108,255,172,0.18)',
+              blue: 'rgba(96,175,255,0.20)', pink: 'rgba(255,128,191,0.20)',
+              orange: 'rgba(255,150,70,0.20)'};
 
   const secEl = document.querySelector('[data-section-id]');
   const sectionId = secEl && secEl.dataset.sectionId;
@@ -136,7 +139,7 @@
     return spans;
   }
   function style(span, ann) {
-    if (ann.kind === 'highlight') { span.style.background = HL[ann.color] || ann.color; span.style.color = '#111827'; }
+    if (ann.kind === 'highlight') { span.style.background = HL[ann.color] || ann.color; }
     if (ann.note) span.title = ann.note;
   }
 
@@ -251,6 +254,121 @@
   });
   document.getElementById('ann-panel-close').addEventListener('click', () => { panel.classList.add('hidden'); panel.classList.remove('flex'); });
   renderPanel();
+
+  // ---- collapse topics (per-topic + collapse all) ----
+  function setCollapsed(article, collapsed) {
+    const body = article.querySelector('.topic-body');
+    const chev = article.querySelector('.topic-chevron');
+    if (body) body.classList.toggle('hidden', collapsed);
+    if (chev) chev.style.transform = collapsed ? 'rotate(-90deg)' : '';
+  }
+  document.querySelectorAll('.topic-collapse').forEach(btn => btn.addEventListener('click', () => {
+    const art = btn.closest('.topic-article');
+    setCollapsed(art, !art.querySelector('.topic-body').classList.contains('hidden'));
+  }));
+  const collapseAll = document.getElementById('collapse-all');
+  if (collapseAll) collapseAll.addEventListener('click', () => {
+    const arts = [...document.querySelectorAll('.topic-article')];
+    const anyOpen = arts.some(a => !a.querySelector('.topic-body').classList.contains('hidden'));
+    arts.forEach(a => setCollapsed(a, anyOpen));
+    document.getElementById('collapse-all-label').textContent = anyOpen ? 'Expand all' : 'Collapse all';
+  });
+
+  // ---- breadcrumb sibling dropdowns ----
+  document.querySelectorAll('.crumb-btn').forEach(btn => btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const menu = btn.nextElementSibling;
+    const wasOpen = !menu.classList.contains('hidden');
+    document.querySelectorAll('.crumb-menu').forEach(m => m.classList.add('hidden'));
+    menu.classList.toggle('hidden', wasOpen);
+  }));
+  document.addEventListener('click', e => {
+    if (!e.target.closest?.('.crumb-btn') && !e.target.closest?.('.crumb-menu'))
+      document.querySelectorAll('.crumb-menu').forEach(m => m.classList.add('hidden'));
+  });
+
+  // ---- table of contents ----
+  const tocBtn = document.getElementById('toc-btn'), tocPanel = document.getElementById('toc-panel');
+  if (tocBtn) tocBtn.addEventListener('click', e => { e.stopPropagation(); tocPanel.classList.toggle('hidden'); });
+  tocPanel?.querySelectorAll('.toc-item').forEach(a => a.addEventListener('click', e => {
+    e.preventDefault();
+    const el = document.getElementById(a.getAttribute('href').slice(1));
+    if (el) { setCollapsed(el, false); el.scrollIntoView({behavior: 'smooth', block: 'start'}); }
+    tocPanel.classList.add('hidden');
+  }));
+  document.addEventListener('click', e => {
+    if (tocPanel && !tocPanel.contains(e.target) && e.target !== tocBtn && !tocBtn?.contains(e.target)) tocPanel.classList.add('hidden');
+  });
+
+  // ---- topic actions menu ----
+  const actMenu = document.getElementById('topic-actions-menu');
+  let actTopic = null, actTitle = null;
+  document.querySelectorAll('.topic-actions-btn').forEach(btn => btn.addEventListener('click', e => {
+    e.stopPropagation();
+    actTopic = btn.dataset.topic; actTitle = btn.dataset.title;
+    const r = btn.getBoundingClientRect();
+    actMenu.style.top = (r.bottom + 6) + 'px';
+    actMenu.style.left = Math.max(8, r.right - 208) + 'px';
+    actMenu.classList.remove('hidden');
+  }));
+  document.addEventListener('click', e => { if (actMenu && !actMenu.contains(e.target)) actMenu.classList.add('hidden'); });
+  actMenu?.querySelectorAll('button[data-act]').forEach(b => b.addEventListener('click', async () => {
+    actMenu.classList.add('hidden');
+    if (b.dataset.act === 'note') { window.TempuNoteEditor?.open(actTopic, actTitle); }
+    else if (b.dataset.act === 'copy') {
+      const url = location.origin + location.pathname + '#topic-' + actTopic;
+      try { await navigator.clipboard.writeText(url); } catch (e) {}
+    } else if (b.dataset.act === 'collection') {
+      const name = prompt('Save "' + actTitle + '" to which collection? (type a name)');
+      if (name) await fetch('/api/collections', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, item_type: 'topic', topic_id: actTopic})}).catch(() => {});
+    }
+  }));
+
+  // ---- per-topic flashcards dialog ----
+  const fcModal = document.getElementById('fc-modal');
+  async function openCards(topicId, title) {
+    const r = await fetch('/api/cards?scope=topic&id=' + encodeURIComponent(topicId));
+    const d = await r.json();
+    const cards = d.cards || [];
+    document.getElementById('fc-title').textContent = title;
+    const stage = document.getElementById('fc-stage'), foot = document.getElementById('fc-foot');
+    let i = 0, revealed = false;
+    function show() {
+      if (i >= cards.length) { stage.innerHTML = '<p class="py-10 text-center text-muted-foreground">Done — ' + cards.length + ' cards reviewed.</p>'; foot.innerHTML = ''; return; }
+      revealed = false;
+      stage.innerHTML = cards[i].front_html;
+      document.getElementById('fc-progress').textContent = (i + 1) + ' / ' + cards.length;
+      foot.innerHTML = '<button id="fc-reveal" class="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground">Reveal answer · Space</button>';
+      foot.querySelector('#fc-reveal').onclick = reveal;
+    }
+    function reveal() {
+      revealed = true; stage.innerHTML = cards[i].back_html;
+      const pv = cards[i].previews || {};
+      foot.innerHTML = '<div class="grid grid-cols-4 gap-2">' +
+        [['1','Again','text-tag-orange'],['2','Hard',''],['3','Good','text-status-success'],['4','Easy','text-status-info']]
+        .map(([n,l,c]) => '<button class="fc-rate rounded-xl border py-2 text-xs hover:bg-accent" data-r="'+n+'"><div class="font-semibold '+c+'">'+l+'</div><div class="text-[10px] text-muted-foreground">'+(pv[n]||'')+'</div></button>').join('') + '</div>';
+      foot.querySelectorAll('.fc-rate').forEach(b => b.onclick = () => rate(+b.dataset.r));
+    }
+    async function rate(n) {
+      try { await fetch('/api/review', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: cards[i].id, rating: n})}); } catch(e){}
+      i++; show();
+    }
+    fcModal._reveal = () => { if (!revealed) reveal(); };
+    fcModal._rate = (n) => { if (revealed) rate(n); };
+    if (!cards.length) { stage.innerHTML = '<p class="py-10 text-center text-muted-foreground">No cards for this topic.</p>'; foot.innerHTML=''; }
+    else show();
+    fcModal.classList.remove('hidden'); fcModal.classList.add('flex');
+  }
+  document.querySelectorAll('.topic-cards-btn').forEach(b => b.addEventListener('click', () => openCards(b.dataset.topic, b.dataset.title)));
+  document.getElementById('fc-close')?.addEventListener('click', () => { fcModal.classList.add('hidden'); fcModal.classList.remove('flex'); });
+  document.addEventListener('keydown', e => {
+    if (fcModal && !fcModal.classList.contains('hidden')) {
+      if (e.key === ' ') { e.preventDefault(); fcModal._reveal?.(); }
+      else if (['1','2','3','4'].includes(e.key)) fcModal._rate?.(+e.key);
+      else if (e.key === 'Escape') { fcModal.classList.add('hidden'); fcModal.classList.remove('flex'); }
+    }
+  });
 
   // scroll to hash topic
   if (location.hash.startsWith('#topic-')) {

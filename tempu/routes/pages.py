@@ -168,9 +168,18 @@ def _reader(section_id):
                              "prefix_text": n["prefix_text"], "suffix_text": n["suffix_text"]}
                             for n in inl.get(tid, [])],
         }
+    import re as _re
+    banner = None
+    for t in topics:
+        m = _re.search(r'src="(/assets/media/[^"]+?\.(?:png|jpg|jpeg|webp))"', t["document_html"] or "")
+        if m:
+            banner = m.group(1)
+            break
     return render_template("reader.html", active="libraries", library=lib, chapter=ch,
                            section=sec, topics=topic_views, next_section=nxt,
-                           sec_done=sec_done, sec_total=len(topics),
+                           sec_done=sec_done, sec_total=len(topics), banner=banner,
+                           lib_chapters=S.chapter_rows(lib["id"]),
+                           chap_sections=S.section_rows(ch["id"]),
                            annotations_json=_json.dumps(annotations))
 
 
