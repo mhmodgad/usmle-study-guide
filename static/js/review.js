@@ -13,7 +13,9 @@
   const openWrap = document.getElementById('open-topic-wrap');
   const openLink = document.getElementById('open-topic');
 
-  let cards = [], i = 0, revealed = false, known = 0, missed = 0;
+  let cards = [], i = 0, revealed = false, known = 0, missed = 0, busy = false;
+  // new layout only: a card answered "Again" comes back at the end of the session
+  const requeueAgain = !!window.TempuRequeueAgain;
 
   async function load() {
     const url = '/api/cards?scope=' + encodeURIComponent(scope) + '&id=' + encodeURIComponent(scopeId);
@@ -21,7 +23,8 @@
     const d = await r.json();
     cards = d.cards || [];
     if (!cards.length) {
-      mount.innerHTML = '<p class="text-center text-muted-foreground">No cards here yet.</p>';
+      mount.innerHTML = window.TempuEmptyReview ? window.TempuEmptyReview(scope)
+        : '<p class="text-center text-muted-foreground">No cards here yet.</p>';
       controls.classList.add('hidden');
       return;
     }
@@ -41,7 +44,7 @@
   }
 
   function reveal() {
-    if (revealed) return;
+    if (revealed || busy || i >= cards.length) return;        // nothing left to show
     revealed = true;
     const c = cards[i];
     mount.innerHTML = c.back_html;
@@ -61,12 +64,20 @@
   }
 
   async function rate(r) {
+    // one rating per card: a double click or a held key used to rate it twice
+    if (busy || !revealed || i >= cards.length) return;
+    busy = true; revealed = false;
     const c = cards[i];
     if (r <= 1) missed++; else known++;
     try {
-      await fetch('/api/review', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      const resp = await fetch('/api/review', {method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({card_id: c.id, rating: r})});
+      const d = await resp.json().catch(() => ({}));
+      if (requeueAgain && r <= 1 && !c.requeued) {
+        cards.push(Object.assign({}, c, {previews: d.previews || c.previews, requeued: true}));
+      }
     } catch (e) { /* keep going offline */ }
+    finally { busy = false; }
     i++;
     if (i >= cards.length) return finish();
     show();
@@ -85,8 +96,10 @@
     b.addEventListener('click', () => { if (revealed) rate(+b.dataset.rating); }));
 
   document.getElementById('shuffle-btn').addEventListener('click', () => {
-    for (let j = cards.length - 1; j > 0; j--) { const k = Math.floor(Math.random() * (j + 1)); [cards[j], cards[k]] = [cards[k], cards[j]]; }
-    i = 0; known = 0; missed = 0; show();
+    // shuffle only the cards still to come; the ones already answered stay answered
+    if (busy || i >= cards.length - 1) return;
+    for (let j = cards.length - 1; j > i; j--) { const k = i + Math.floor(Math.random() * (j - i + 1)); [cards[j], cards[k]] = [cards[k], cards[j]]; }
+    show();
   });
   const restart = document.getElementById('restart-btn');
   if (restart) restart.addEventListener('click', () => {

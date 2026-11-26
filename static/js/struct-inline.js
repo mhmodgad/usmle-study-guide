@@ -4,7 +4,9 @@
 // data-ed-kind / data-ed-id / data-ed-parent.
 (function () {
   const J = {'Content-Type': 'application/json'};
-  const api = (m, u, b) => fetch(u, {method: m, headers: J, body: b ? JSON.stringify(b) : undefined}).then(r => r.json());
+  const api = (m, u, b) => fetch(u, {method: m, headers: J, body: b ? JSON.stringify(b) : undefined})
+    .then(r => r.json().catch(() => ({error: 'Something went wrong (' + r.status + ')'})))
+    .then(d => { if (d && d.error) toast(d.error); return d; });       // say why it was refused
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
   const toast = m => { let t = document.getElementById('tempu-toast'); if (!t) { t = document.createElement('div'); t.id = 'tempu-toast'; document.body.appendChild(t); } t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2400); };
   const host = el => el.closest('[data-ed-kind]');

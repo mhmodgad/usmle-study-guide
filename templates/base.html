@@ -67,6 +67,7 @@
   <button id="pm-notifications" class="block w-full px-4 py-2 text-left text-sm hover:bg-accent">Notifications</button>
   <a href="/settings/notifications" class="block w-full px-4 py-2 text-left text-sm hover:bg-accent">Notification settings</a>
   <a href="/billing" class="block w-full px-4 py-2 text-left text-sm hover:bg-accent">Billing</a>
+  <a href="/ui/new?next={{ request.full_path|urlencode }}" class="block w-full px-4 py-2 text-left text-sm hover:bg-accent" title="A simpler layout with a Today dashboard and a guided study flow. You can switch back any time.">Switch to new layout</a>
   <a href="/settings/account" class="block w-full px-4 py-2 text-left text-sm hover:bg-accent">Settings</a>
   <button class="block w-full border-t px-4 py-2 text-left text-sm text-destructive hover:bg-accent" onclick="alert('Sign out is disabled in the local app.')">Sign out</button>
 </div>

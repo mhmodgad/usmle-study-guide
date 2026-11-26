@@ -88,11 +88,19 @@
 {% block scripts %}
 <script>
 (function () {
+  // Request budget for this page: one status request every 2 s only while a backup or
+  // restore runs, every 30 s otherwise, nothing while the tab is hidden. The log is
+  // fetched only when a run starts or ends. "Connect Google Drive" is polled only
+  // while it is in progress. The header chip is fed from here (no second poller).
   const H = window.TempuHistory, esc = H.esc, $ = id => document.getElementById(id);
   let cfg, cats;
   const sizeWord = {small: 'small', depends: 'size varies', large: 'large', 'very large': 'very large'};
-  async function load() {
-    const d = await (await fetch('/api/backup/config')).json();
+  const getJSON = async (url, opt) => { const r = await fetch(url, opt); let d = {}; try { d = await r.json(); } catch (e) {} return {r, d}; };
+  const post = (url, body) => getJSON(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+
+  // ---------- settings
+  async function loadConfig() {
+    const {d} = await getJSON('/api/backup/config');
     cfg = d.config; cats = d.categories;
     $('bk-enabled').checked = cfg.enabled;
     document.querySelectorAll('input[name=schedule]').forEach(r => r.checked = r.value === cfg.schedule);
@@ -103,7 +111,7 @@
       <span><span class="text-sm font-medium">${esc(c.label)}</span><br><span class="th-muted">${esc(c.description)}</span></span>
       <span class="th-size">${esc(sizeWord[c.size] || c.size)}</span></label>`).join('');
     $('bk-rclone-help').textContent = d.rclone ? 'rclone is installed.' : 'rclone is not installed yet — "Connect Google Drive" downloads it, or install it from rclone.org.';
-    showWhere(); status(); log(); pollConnect();
+    showWhere();
   }
   function collect() {
     const categories = {};
@@ -112,119 +120,183 @@
       interval_hours: +$('bk-hours').value || 6, remote: $('bk-remote').value.trim(), categories,
       keep_recent: +$('bk-keep-recent').value || 20, keep_daily: +$('bk-keep-daily').value || 0, keep_monthly: +$('bk-keep-monthly').value || 0};
   }
+  let saving = false;
   async function save() {
+    if (saving) return false;
     const body = collect();
     if (body.enabled && !body.remote) { $('bk-msg').textContent = 'Connect Google Drive (or choose another remote) first.'; return false; }
-    const r = await fetch('/api/backup/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-    $('bk-msg').textContent = r.ok ? 'Saved.' : 'Could not save.';
-    status();
-    return r.ok;
+    saving = true;
+    try {
+      const {r} = await post('/api/backup/config', body);
+      $('bk-msg').textContent = r.ok ? 'Saved.' : 'Could not save.';
+      if (r.ok) { cfg = Object.assign(cfg || {}, body); showWhere(); }
+      poll.now();
+      return r.ok;
+    } finally { saving = false; }
   }
-  async function status() {
-    const s = await (await fetch('/api/backup/status')).json();
+
+  // ---------- status: a single poller
+  const poll = {
+    timer: null, inflight: false, lastRunning: null, logLoaded: false,
+    now() { clearTimeout(this.timer); this.timer = setTimeout(() => this.tick(), 0); },
+    later(ms) { clearTimeout(this.timer); this.timer = setTimeout(() => this.tick(), ms); },
+    async tick() {
+      if (document.hidden) { this.stale = true; return; }
+      if (this.inflight) return;
+      this.inflight = true;
+      let running = false;
+      try {
+        const {d: s} = await getJSON('/api/backup/status');
+        running = s.state === 'running' || !!(s.running && s.running.running);
+        paintStatus(s);
+        if (H.updateChip) H.updateChip(s);
+        if (!this.logLoaded || running !== this.lastRunning) { this.logLoaded = true; log(); }
+        if (this.lastRunning && !running && /Backing up|already running/.test($('bk-msg').textContent))
+          $('bk-msg').textContent = s.state === 'error' ? 'The backup failed — see below.' : 'Backup finished.';
+        this.lastRunning = running;
+      } catch (e) { /* server restarting: try again later */ }
+      finally { this.inflight = false; }
+      this.later(running ? 2000 : 30000);
+    },
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && poll.stale) { poll.stale = false; poll.now(); } });
+  function paintStatus(s) {
     const el = $('bk-status');
     el.className = 'th-banner' + (s.state === 'error' ? ' err' : '');
     let t = s.text;
     if (s.last_ok) t += ' · last backup ' + H.when(s.last_ok);
-    if (s.files_waiting) t += ` · ${s.files_waiting} file(s) not uploaded yet`;
-    if (s.last_error) t += ' · ' + s.last_error;
+    if (s.files_waiting && s.state !== 'off') t += ` · ${s.files_waiting} file(s) not uploaded yet`;
+    if (s.last_error && s.state === 'error') t += ' · ' + s.last_error;
     if (s.running && s.running.step) t = s.running.step;
     el.textContent = t;
-    if (s.state === 'running' || (s.running && s.running.running)) setTimeout(() => { status(); log(); }, 2000);
+    $('bk-run').disabled = !!(s.running && s.running.running);
   }
   async function log() {
-    const rows = await (await fetch('/api/backup/log')).json();
-    $('bk-log').innerHTML = rows.length ? rows.map(r => `<div class="th-act-row"><span class="th-kind">${r.ok ? 'ok' : (r.finished_at ? 'failed' : 'running')}</span>
+    const {d: rows} = await getJSON('/api/backup/log');
+    $('bk-log').innerHTML = (rows && rows.length) ? rows.map(r => `<div class="th-act-row"><span class="th-kind">${r.ok ? 'ok' : (r.finished_at ? 'failed' : 'running')}</span>
       <div class="th-act-main"><div class="th-act-label">${esc(r.snapshot || r.error || '')}</div>
       <div class="th-muted">${esc(H.when(r.started_at))}${r.ok ? ` · ${r.blobs_sent} file(s) · ${(r.bytes_sent / 1048576).toFixed(1)} MB` : ''}</div></div></div>`).join('')
       : '<p class="th-muted">No backups yet.</p>';
   }
+
   $('bk-save').addEventListener('click', save);
   $('bk-test').addEventListener('click', async () => {
-    $('bk-msg').textContent = 'Testing…';
-    const r = await fetch('/api/backup/test', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({remote: $('bk-remote').value.trim()})});
-    const d = await r.json();
-    $('bk-msg').textContent = d.ok ? d.message : d.error;
+    const b = $('bk-test'); if (b.disabled) return;
+    b.disabled = true; $('bk-msg').textContent = 'Testing…';
+    try {
+      const {d} = await post('/api/backup/test', {remote: $('bk-remote').value.trim()});
+      $('bk-msg').textContent = d.ok ? d.message : (d.error || 'The test failed.');
+    } finally { b.disabled = false; }
   });
   $('bk-run').addEventListener('click', async () => {
-    if (!(await save())) return;
-    await fetch('/api/backup/run', {method: 'POST'});
-    $('bk-msg').textContent = 'Backing up…';
-    setTimeout(() => { status(); log(); }, 800);
+    const b = $('bk-run'); if (b.disabled) return;
+    b.disabled = true;
+    try {
+      if (!(await save())) return;
+      const {r, d} = await post('/api/backup/run');
+      $('bk-msg').textContent = r.ok ? (d.already ? 'A backup is already running.' : 'Backing up…') : (d.error || 'Could not start the backup.');
+      poll.later(500);
+    } finally { setTimeout(() => { b.disabled = false; }, 1500); }
   });
+
+  // ---------- snapshots: one listing request; what a snapshot holds is fetched when you open it
   $('bk-list').addEventListener('click', async () => {
-    const box = $('bk-snaps');
-    box.innerHTML = '<p class="th-muted">Loading…</p>';
-    const d = await (await fetch('/api/backup/snapshots')).json();
-    if (!d.ok) { box.innerHTML = `<p class="th-banner err">${esc(d.error)}</p>`; return; }
+    const btn = $('bk-list'), box = $('bk-snaps');
+    if (btn.disabled) return;
+    btn.disabled = true; box.innerHTML = '<p class="th-muted">Loading…</p>';
+    let d;
+    try { d = (await getJSON('/api/backup/snapshots')).d; } finally { btn.disabled = false; }
+    if (!d.ok) { box.innerHTML = `<p class="th-banner err">${esc(d.error || 'Could not list the backups.')}</p>`; return; }
     if (!d.snapshots.length) { box.innerHTML = '<p class="th-muted">No backups yet.</p>'; return; }
-    box.innerHTML = d.snapshots.map((s, i) => {
+    box.innerHTML = d.snapshots.map(s => {
       const t = s.name.slice(5, 21), iso = `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}T${t.slice(9, 11)}:${t.slice(11, 13)}:${t.slice(13, 15)}Z`;
-      const inc = s.categories || null;
-      return `<div class="th-card" data-snap="${esc(s.name)}"><div class="flex items-center justify-between gap-2">
+      return `<div class="th-card" data-snap="${esc(s.name)}"><div class="flex flex-wrap items-center justify-between gap-2">
         <div><b>${esc(H.when(iso))}</b> <span class="th-muted">${s.bytes ? (s.bytes / 1048576).toFixed(1) + ' MB' : ''}</span></div>
-        <button class="th-btn primary" data-go>Restore…</button></div>
-        <div class="th-cats mt-2" data-pick hidden>${cats.map(c => {
-          const has = !inc || inc.includes(c.key) || ['base', 'source', 'media'].includes(c.key);
-          return `<label class="th-cat"><input type="checkbox" value="${c.key}" ${has && !['base', 'source', 'media'].includes(c.key) ? 'checked' : ''} ${has ? '' : 'disabled'}>
-            <span class="text-sm">${esc(c.label)}${has ? '' : ' <span class="th-muted">(not in this backup)</span>'}</span></label>`; }).join('')}
-          <div class="th-actions"><button class="th-btn primary" data-confirm>Restore the ticked data</button></div></div></div>`;
-    }).join('');
-    box.querySelectorAll('[data-snap]').forEach(card => {
-      card.querySelector('[data-go]').addEventListener('click', () => card.querySelector('[data-pick]').hidden = false);
-      card.querySelector('[data-confirm]').addEventListener('click', async () => {
-        const categories = [...card.querySelectorAll('[data-pick] input:checked')].map(i => i.value);
-        if (!categories.length) return;
-        if (!confirm('Replace your current ' + categories.length + ' kind(s) of data with this backup? A copy of what you have now is kept in data/backup/.')) return;
-        await fetch('/api/backup/restore', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: card.dataset.snap, categories})});
-        $('bk-status').textContent = 'Restoring…';
-        const poll = async () => {
-          const r = await (await fetch('/api/backup/restore/result')).json();
-          if (r.ok === undefined) { status(); return setTimeout(poll, 1500); }
-          if (r.ok) H.reloadWith('Restored ' + r.categories.length + ' kind(s) of data from the backup');
-          else { $('bk-status').className = 'th-banner err'; $('bk-status').textContent = 'Restore failed: ' + r.error; }
-        };
-        setTimeout(poll, 1000);
-      });
-    });
+        <button class="th-btn primary" data-go>Restore…</button></div><div class="th-cats mt-2" data-pick hidden></div></div>`;
+    }).join('') + (d.total > d.snapshots.length ? `<p class="th-muted">Showing the newest ${d.snapshots.length} of ${d.total}.</p>` : '');
+    box.querySelectorAll('[data-snap]').forEach(card => card.querySelector('[data-go]').addEventListener('click', () => openSnapshot(card)));
   });
-  // ---- one-click Google Drive
+  async function openSnapshot(card) {
+    const pick = card.querySelector('[data-pick]');
+    if (!pick.hidden) { pick.hidden = true; return; }
+    pick.hidden = false;
+    if (pick.dataset.loaded) return;
+    pick.innerHTML = '<p class="th-muted">Checking what this backup contains…</p>';
+    const {d: info} = await getJSON('/api/backup/snapshots/' + encodeURIComponent(card.dataset.snap));
+    pick.dataset.loaded = '1';
+    const inc = info.categories || null, big = ['base', 'source', 'media'];
+    pick.innerHTML = cats.map(c => {
+      const has = !inc || inc.includes(c.key) || big.includes(c.key);
+      return `<label class="th-cat"><input type="checkbox" value="${c.key}" ${has && !big.includes(c.key) ? 'checked' : ''} ${has ? '' : 'disabled'}>
+        <span class="text-sm">${esc(c.label)}${has ? '' : ' <span class="th-muted">(not in this backup)</span>'}</span></label>`; }).join('') +
+      '<div class="th-actions"><button class="th-btn primary" data-confirm>Restore the ticked data</button></div>';
+    pick.querySelector('[data-confirm]').addEventListener('click', e => doRestore(card, e.currentTarget));
+  }
+  async function doRestore(card, btn) {
+    const categories = [...card.querySelectorAll('[data-pick] input:checked')].map(i => i.value);
+    if (!categories.length || btn.disabled) return;
+    if (!confirm('Replace your current ' + categories.length + ' kind(s) of data with this backup? A copy of what you have now is kept in data/backup/.')) return;
+    btn.disabled = true;
+    const {r, d} = await post('/api/backup/restore', {name: card.dataset.snap, categories});
+    if (!r.ok) { btn.disabled = false; $('bk-status').className = 'th-banner err'; $('bk-status').textContent = d.error || 'Could not start the restore.'; return; }
+    $('bk-status').textContent = 'Restoring…';
+    poll.later(800);
+    const wait = async () => {
+      const {d: res} = await getJSON('/api/backup/restore/result');
+      if (res.ok === undefined) return setTimeout(wait, 2000);
+      if (res.ok) H.reloadWith('Restored ' + res.categories.length + ' kind(s) of data from the backup');
+      else { btn.disabled = false; $('bk-status').className = 'th-banner err'; $('bk-status').textContent = 'Restore failed: ' + res.error; }
+    };
+    setTimeout(wait, 1500);
+  }
+
+  // ---------- one-click Google Drive
   function showWhere() {
     const drive = (cfg.remote || '').startsWith('tempu-drive:');
     $('gd-on').hidden = !drive; $('gd-off').hidden = drive;
     if (cfg.remote && !drive) $('bk-advanced').open = true;
   }
-  let gdTimer = null;
+  const BUSY = ['downloading', 'waiting', 'finishing'];
+  let gdTimer = null, gdWasBusy = false;
   async function pollConnect() {
-    const st = await (await fetch('/api/backup/connect-drive')).json();
+    clearTimeout(gdTimer);
+    const {d: st} = await getJSON('/api/backup/connect-drive');
     const box = $('gd-progress'), btn = $('gd-connect');
-    const busy = ['downloading', 'waiting', 'finishing'].includes(st.state);
+    const busy = BUSY.includes(st.state);
     btn.disabled = busy;
     btn.textContent = busy ? 'Connecting…' : 'Connect Google Drive';
-    if (st.state === 'idle' || st.state === 'cancelled' || !st.state) { box.hidden = true; btn.disabled = false; btn.textContent = 'Connect Google Drive'; return; }
-    box.hidden = false;
-    box.className = 'th-banner' + (st.state === 'error' ? ' err' : '');
-    box.innerHTML = esc(st.message || '') +
-      (st.auth_url ? ` <a class="th-btn primary" style="margin-left:.4rem" href="${esc(st.auth_url)}" target="_blank" rel="noopener">Open Google sign-in</a>` : '') +
-      (busy ? ' <button class="th-btn" id="gd-cancel" type="button" style="margin-left:.4rem">Cancel</button>' : '');
-    const c = document.getElementById('gd-cancel');
-    if (c) c.onclick = () => fetch('/api/backup/connect-drive/cancel', {method: 'POST'});
-    if (busy) { gdTimer = setTimeout(pollConnect, 1500); return; }
-    if (st.state === 'done') { await load(); setTimeout(() => { status(); log(); }, 1500); }
+    if (!st.state || st.state === 'idle' || st.state === 'cancelled' || (st.state === 'done' && !gdWasBusy)) {
+      box.hidden = true;                       // nothing in progress; an old "done" isn't news
+    } else {
+      box.hidden = false;
+      box.className = 'th-banner' + (st.state === 'error' ? ' err' : '');
+      box.innerHTML = esc(st.message || '') +
+        (st.auth_url ? ` <a class="th-btn primary" style="margin-left:.4rem" href="${esc(st.auth_url)}" target="_blank" rel="noopener">Open Google sign-in</a>` : '') +
+        (busy ? ' <button class="th-btn" id="gd-cancel" type="button" style="margin-left:.4rem">Cancel</button>' : '');
+      const c = document.getElementById('gd-cancel');
+      if (c) c.onclick = async () => { c.disabled = true; await post('/api/backup/connect-drive/cancel'); pollConnect(); };
+    }
+    if (busy) { gdWasBusy = true; gdTimer = setTimeout(pollConnect, 1500); return; }
+    if (gdWasBusy) {                           // it just finished: refresh once, never loop
+      gdWasBusy = false;
+      if (st.state === 'done') { await loadConfig(); poll.now(); }
+    }
   }
   $('gd-connect').addEventListener('click', async () => {
-    clearTimeout(gdTimer);
-    await fetch('/api/backup/connect-drive', {method: 'POST'});
+    const btn = $('gd-connect'); if (btn.disabled) return;
+    btn.disabled = true;
+    await post('/api/backup/connect-drive');
+    gdWasBusy = true;
     pollConnect();
   });
   $('gd-disconnect').addEventListener('click', async () => {
     if (!confirm('Stop backing up to Google Drive? Backups already in your Drive are kept.')) return;
-    await fetch('/api/backup/disconnect-drive', {method: 'POST'});
-    await load();
+    await post('/api/backup/disconnect-drive');
+    await loadConfig(); poll.now(); pollConnect();
   });
 
   $('bk-enabled').addEventListener('change', () => { if ($('bk-enabled').checked && !$('bk-remote').value.trim()) $('bk-remote').focus(); });
-  load();
+  (async () => { await loadConfig(); poll.now(); pollConnect(); })();
 })();
 </script>
 {% endblock %}

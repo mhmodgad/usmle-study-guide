@@ -13,7 +13,8 @@ def _cs_out(c):
     return {"id": c["id"], "label": c["label"], "kind": c["kind"], "at": c["updated_at"],
             "created_at": c["created_at"], "scope_kind": c["scope_kind"], "scope_id": c["scope_id"],
             "undone": bool(c["undone"]), "rows": c["n_rows"], "reverts": reverts,
-            "can_undo": not c["undone"] and c["kind"] != "import",
+            # an "Undid: ..." entry has no button of its own: the change it took back shows Redo
+            "can_undo": not c["undone"] and c["kind"] not in ("import", "undo"),
             "can_redo": bool(c["undone"]) and c["kind"] not in ("undo", "redo", "restore", "import")}
 
 
@@ -83,15 +84,26 @@ def undo(cid):
 @bp.route("/redo/<cid>", methods=["POST"])
 def redo(cid):
     """Redo = undo the undo. ``cid`` is the changeset that was undone, or 'latest'."""
+    force = bool((request.get_json(silent=True) or {}).get("force"))
     if cid == "latest":
         target = H.latest_redoable(g.db)
     else:
-        r = g.db.execute("SELECT id FROM changesets WHERE kind IN ('undo','restore') AND undone=0 "
+        r = g.db.execute("SELECT id, kind FROM changesets WHERE kind IN ('undo','restore') AND undone=0 "
                          "AND reverts LIKE ? ORDER BY id DESC LIMIT 1", ('%"' + cid + '"%',)).fetchone()
         target = r[0] if r else None
+        if r and r["kind"] == "restore":
+            # taken back by a checkpoint restore: bring back just this change,
+            # not everything the restore reverted
+            try:
+                ch, conflicts = H.reapply(g.db, cid, force=force)
+            except KeyError:
+                return jsonify({"ok": False, "error": "not found"}), 404
+            if ch is None and conflicts:
+                return jsonify({"ok": False, "needs_confirm": True, "conflicts": _describe(conflicts)}), 409
+            return jsonify({"ok": True, "changeset": ch.info() if ch else None, "kept": _describe(conflicts)})
     if not target:
         return jsonify({"ok": False, "error": "Nothing to redo"}), 404
-    return _do_undo(target, bool((request.get_json(silent=True) or {}).get("force")))
+    return _do_undo(target, force)
 
 
 @bp.route("/checkpoints", methods=["GET", "POST"])
@@ -107,7 +119,9 @@ def checkpoints():
     rows = g.db.execute("SELECT * FROM checkpoints ORDER BY created_at DESC").fetchall()
     out = []
     for r in rows:
-        since = g.db.execute("SELECT COUNT(*) FROM changesets WHERE undone=0 AND kind!='import' AND id > ?",
+        # changes still in effect since the checkpoint (undos and restores only take things back)
+        since = g.db.execute("SELECT COUNT(*) FROM changesets WHERE undone=0 "
+                             "AND kind NOT IN ('import','undo','restore') AND id > ?",
                              (r["changeset_id"] or "",)).fetchone()[0]
         out.append({**dict(r), "changes_since": since})
     return jsonify(out)

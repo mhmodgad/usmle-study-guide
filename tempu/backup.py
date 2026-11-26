@@ -44,10 +44,10 @@ CATEGORIES = {
                "topic_edit_history", "struct_overrides"], True, "small"),
     "study": ("Study progress", "Completed topics, reading position, bookmarks, study log.",
               ["progress", "section_state", "study_log"], True, "small"),
-    "notes": ("Highlights & notes", "Highlights, inline notes and topic notes.",
-              ["highlights", "inline_notes", "topic_notes"], True, "small"),
-    "flashcards": ("Flashcards & decks", "Your decks and spaced-repetition review state.",
-                   ["card_reviews", "decks", "deck_cards"], True, "small"),
+    "notes": ("Highlights, notes & collections", "Highlights, inline notes, topic notes and your collections.",
+              ["highlights", "inline_notes", "topic_notes", "my_collections", "my_collection_items"], True, "small"),
+    "flashcards": ("Flashcards & decks", "Your decks, cards you made and spaced-repetition review state.",
+                   ["card_reviews", "decks", "deck_cards", "my_cards"], True, "small"),
     "settings": ("Settings & profile", "Display name, avatar, theme, reader and app preferences.",
                  ["settings"], True, "small"),
     "files": ("Files you added", "Images and icons you added with the editor (data/blobs).",
@@ -73,6 +73,10 @@ DEFAULT_CONFIG = {
 QUIET_SECONDS = 60          # wait this long after the last change (bursts -> one backup)
 MIN_GAP_SECONDS = 600       # "auto": at most one backup every 10 minutes
 BACKOFF_MINUTES = [1, 5, 15, 60]
+EXIT_BUDGET_SECONDS = 45    # how long closing the app may wait for a last backup
+CONNECT_STALE_SECONDS = 300 # a finished/failed "Connect Google Drive" message is shown this long
+MISSING = "missing"         # blobs.uploaded_at for a file that is no longer on disk
+PRE_RESTORE_KEEP = 5        # safety copies made before a restore that are kept
 LOCAL_KEEP = 3              # snapshots also kept in data/backup for local recovery
 
 
@@ -197,12 +201,19 @@ def _set_connect(**kw):
     with _CONNECT_LOCK:
         if kw.get("state") in ("downloading",):
             _CONNECT.clear()
+        if "state" in kw:
+            kw.setdefault("at", time.time())
         _CONNECT.update(kw)
 
 
 def connect_status():
+    """Progress of "Connect Google Drive". A finished, failed or cancelled
+    attempt is reported for a few minutes, then reads as idle again."""
     with _CONNECT_LOCK:
-        return dict(_CONNECT)
+        st = dict(_CONNECT)
+    if st.get("state") in ("done", "error", "cancelled") and time.time() - st.get("at", 0) > CONNECT_STALE_SECONDS:
+        return {"state": "idle"}
+    return st
 
 
 def _platform_tag():
@@ -392,26 +403,36 @@ def _last_run(conn):
     return dict(r) if r else None
 
 
-def _last_change_time(db_path):
-    user = dbmod.paths(db_path)[0]
-    t = 0
-    for p in (user, user + "-wal"):
-        if os.path.exists(p):
-            t = max(t, os.path.getmtime(p))
-    return t
+def _change_seq(conn):
+    """The data-change counter kept by the triggers in tempu.db.install_change_counter."""
+    return int(_meta(conn, "change_seq") or 0)
 
 
-def pending(conn, db_path):
-    """(has_changes, changes_since_last_backup, files_waiting)."""
+def _last_change_time(conn):
+    """Unix time of the last change to your data (0 = unknown)."""
+    try:
+        return int(_meta(conn, "change_at") or 0)
+    except ValueError:
+        return 0
+
+
+def pending(conn, db_path=None):
+    """(has_changes, changes_since_last_backup, files_waiting).
+
+    "Changed" means the change counter moved since the last successful
+    snapshot. The backup's own writes (its log, upload stamps, settings in
+    user_meta) are not counted, so a finished backup really reads as done."""
+    files = 0
+    if get_config(conn)["categories"].get("files"):
+        files = conn.execute("SELECT COUNT(*) FROM blobs WHERE uploaded_at IS NULL").fetchone()[0]
     last = _last_ok(conn)
-    files = conn.execute("SELECT COUNT(*) FROM blobs WHERE uploaded_at IS NULL").fetchone()[0]
-    if not last:
+    done_seq = _meta(conn, "backup_seq")
+    if not last or done_seq is None:
         n = conn.execute("SELECT COUNT(*) FROM changesets").fetchone()[0]
         return True, n, files
-    n = conn.execute("SELECT COUNT(*) FROM changesets WHERE updated_at > ?", (last["started_at"],)).fetchone()[0]
-    started = _parse(last["started_at"])
-    dirty = _last_change_time(db_path) > (started.timestamp() + 2 if started else 0)
-    return bool(dirty or n or files), n, files
+    dirty = _change_seq(conn) != int(done_seq)
+    n = conn.execute("SELECT COUNT(*) FROM changesets WHERE updated_at > ?", (last["started_at"],)).fetchone()[0] if dirty else 0
+    return bool(dirty or files), n, files
 
 
 def status(conn, db_path):
@@ -519,7 +540,7 @@ def run(db_path=None, force=False):
         if not force and not cfg["enabled"]:
             return {"ok": 0, "error": "Backup is off."}
         if not cfg["remote"]:
-            raise BackupError("No remote chosen.")
+            return {"ok": 0, "error": "Choose where to back up first (Connect Google Drive)."}
         cats = cfg["categories"]
         started = _iso()
         cur = conn.execute("INSERT INTO backup_log(started_at) VALUES(?)", (started,))
@@ -532,8 +553,15 @@ def run(db_path=None, force=False):
 
         # 1) files you added (before the snapshot that refers to them)
         if cats.get("files"):
+            for r in conn.execute("SELECT sha256, ext FROM blobs WHERE uploaded_at=?", (MISSING,)).fetchall():
+                if os.path.isfile(blobmod.path_for(data_dir, r["sha256"], r["ext"])):
+                    conn.execute("UPDATE blobs SET uploaded_at=NULL WHERE sha256=?", (r["sha256"],))   # it's back
             rows = conn.execute("SELECT sha256, ext, bytes FROM blobs WHERE uploaded_at IS NULL").fetchall()
-            rows = [r for r in rows if os.path.isfile(blobmod.path_for(data_dir, r["sha256"], r["ext"]))]
+            gone = [r for r in rows if not os.path.isfile(blobmod.path_for(data_dir, r["sha256"], r["ext"]))]
+            if gone:      # nothing to upload: don't keep the backup "waiting" for them forever
+                conn.executemany("UPDATE blobs SET uploaded_at=? WHERE sha256=?", [(MISSING, r["sha256"]) for r in gone])
+            conn.commit()
+            rows = [r for r in rows if r not in gone]
             if rows:
                 _step("Uploading %d file(s)…" % len(rows))
                 with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as lst:
@@ -552,6 +580,7 @@ def run(db_path=None, force=False):
 
         # 2) snapshot of user.db with the chosen categories
         _step("Saving a snapshot…")
+        seq = _change_seq(conn)            # read BEFORE the copy: a change made during it stays "waiting"
         gz, info = make_snapshot(db_path, cats, local_dir)
         _step("Uploading the snapshot…")
         rpath = _remote_snapshot_path(info["name"])
@@ -562,12 +591,24 @@ def run(db_path=None, force=False):
         # 3) the large optional items you ticked
         extras = {}
         if cats.get("base") and os.path.isfile(base):
-            _step("Uploading the content database…")
+            # tens of MB: upload only when its CONTENT changed (file times change on
+            # every WAL checkpoint, so they can't be trusted for this)
+            _step("Checking the content database…")
             tmp = os.path.join(local_dir, "base.db")
             s, d = sqlite3.connect(base), sqlite3.connect(tmp)
             s.backup(d); s.close(); d.close()
-            _rclone(cfg, "copyto", tmp, _join(remote, "content/base.db"))
-            os.remove(tmp)
+            h = hashlib.sha256()
+            with open(tmp, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            sig = remote + "|" + h.hexdigest()
+            try:
+                if _meta(conn, "backup_base_sig") != sig:
+                    _step("Uploading the content database…")
+                    _rclone(cfg, "copyto", tmp, _join(remote, "content/base.db"))
+                    _meta(conn, "backup_base_sig", sig)
+            finally:
+                os.remove(tmp)
             extras["base"] = "content/base.db"
         for key, local, rel in (("source", content_dir(), "content/source"),
                                 ("media", os.path.join(assets_dir(), "media"), "content/media")):
@@ -578,7 +619,7 @@ def run(db_path=None, force=False):
 
         # 4) manifest last: until it is written the previous backup stays the current one
         manifest = dict(info, snapshot=rpath, remote_extras=extras, blobs_in_cloud=conn.execute(
-            "SELECT COUNT(*) FROM blobs WHERE uploaded_at IS NOT NULL").fetchone()[0])
+            "SELECT COUNT(*) FROM blobs WHERE uploaded_at IS NOT NULL AND uploaded_at!=?", (MISSING,)).fetchone()[0])
         _rclone(cfg, "rcat", _join(remote, "manifest.json"), input_text=json.dumps(manifest, indent=1))
 
         # 5) retention
@@ -593,6 +634,8 @@ def run(db_path=None, force=False):
                      (_iso(), info["name"], sent_files, sent_bytes, info["last_changeset"], log_id))
         conn.commit()
         _meta(conn, "backup_failures", "0")
+        _meta(conn, "backup_seq", str(seq))
+        _trim_log(conn)
         return dict(conn.execute("SELECT * FROM backup_log WHERE id=?", (log_id,)).fetchone())
     except Exception as e:  # noqa: BLE001 - logged, retried later
         msg = str(e) if isinstance(e, BackupError) else "%s: %s" % (type(e).__name__, e)
@@ -603,12 +646,18 @@ def run(db_path=None, force=False):
                          (_iso(), _iso(), msg))
         conn.commit()
         _meta(conn, "backup_failures", str(int(_meta(conn, "backup_failures") or 0) + 1))
+        _trim_log(conn)
         return {"ok": 0, "error": msg}
     finally:
         conn.close()
         with _LOCK_STATE:
             _RUN_STATE.update(running=False, step=None)
         _RUN_LOCK.release()
+
+
+def _trim_log(conn, keep=200):
+    conn.execute("DELETE FROM backup_log WHERE id NOT IN (SELECT id FROM backup_log ORDER BY id DESC LIMIT ?)", (keep,))
+    conn.commit()
 
 
 def _prune_local(local_dir):
@@ -619,6 +668,22 @@ def _prune_local(local_dir):
                 os.remove(os.path.join(local_dir, p))
             except OSError:
                 pass
+
+
+def list_remote_detailed(cfg):
+    """[{name, bytes}] newest first, from ONE rclone call (sizes come with the listing)."""
+    out = _rclone(cfg, "lsjson", "-R", "--files-only", "--no-mimetype", "--no-modtime",
+                  _join(cfg["remote"], "snapshots"), timeout=300)
+    try:
+        items = json.loads(out or "[]")
+    except ValueError:
+        items = []
+    seen = {}
+    for it in items:
+        n = (it.get("Path") or "").rsplit("/", 1)[-1]
+        if n.endswith(".db.gz"):
+            seen[n] = {"name": n, "bytes": it.get("Size")}
+    return [seen[n] for n in sorted(seen, reverse=True)]
 
 
 def list_remote(cfg):
@@ -651,17 +716,21 @@ def keep_set(names, keep_recent, keep_daily, keep_monthly, now=None):
 
 
 def prune_remote(cfg):
+    """Delete the snapshots the retention rule doesn't keep — in ONE rclone call."""
     names = list_remote(cfg)
     keep = keep_set(names, cfg["keep_recent"], cfg["keep_daily"], cfg["keep_monthly"])
-    for n in names:
-        if n not in keep:
-            p = _remote_snapshot_path(n)
-            _rclone(cfg, "deletefile", _join(cfg["remote"], p), timeout=300)
-            try:
-                _rclone(cfg, "deletefile", _join(cfg["remote"], p[:-3] + ".json"), timeout=300)
-            except BackupError:
-                pass
-    return len(names) - len([n for n in names if n in keep])
+    drop = [n for n in names if n not in keep]
+    if not drop:
+        return 0
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as lst:
+        for n in drop:
+            p = _remote_snapshot_path(n)[len("snapshots/"):]
+            lst.write(p + "\n" + p[:-3] + ".json\n")
+    try:
+        _rclone(cfg, "delete", _join(cfg["remote"], "snapshots"), "--files-from", lst.name, "--rmdirs", timeout=600)
+    finally:
+        os.remove(lst.name)
+    return len(drop)
 
 
 # ------------------------------------------------------------------ restore
@@ -680,6 +749,8 @@ def restore(db_path=None, name=None, only=None, rebuild=True):
     and only the tables of the chosen categories are replaced; everything else
     stays as it is on this computer.
     """
+    if not _RUN_LOCK.acquire(blocking=False):
+        return {"ok": False, "error": "A backup is running. Try again when it has finished."}
     with _LOCK_STATE:
         _RUN_STATE.update(running=True, step="Restoring…")
     conn = dbmod.connect(db_path, journal=False)
@@ -721,6 +792,12 @@ def restore(db_path=None, name=None, only=None, rebuild=True):
         safety = os.path.join(local_dir, "pre-restore-%s.db" % _now().strftime("%Y%m%dT%H%M%SZ"))
         s, d = sqlite3.connect(user), sqlite3.connect(safety)
         s.backup(d); s.close(); d.close()
+        olds = sorted(f for f in os.listdir(local_dir) if f.startswith("pre-restore-") and f.endswith(".db"))
+        for f in olds[:-PRE_RESTORE_KEEP]:
+            try:
+                os.remove(os.path.join(local_dir, f))
+            except OSError:
+                pass
 
         _step("Restoring your data…")
         conn.execute("ATTACH DATABASE ? AS snap", (raw,))
@@ -786,6 +863,7 @@ def restore(db_path=None, name=None, only=None, rebuild=True):
             conn.close()
         with _LOCK_STATE:
             _RUN_STATE.update(running=False, step=None)
+        _RUN_LOCK.release()
 
 
 _RESTORE_RESULT = {}
@@ -801,7 +879,7 @@ def _due(conn, db_path, cfg):
     if not has:
         return False
     now = time.time()
-    if now - _last_change_time(db_path) < QUIET_SECONDS:
+    if now - _last_change_time(conn) < QUIET_SECONDS:
         return False
     last = _last_run(conn)
     if last:
@@ -856,8 +934,12 @@ def _at_exit(db_path):
         has, _, _ = pending(conn, db_path)
         conn.close()
         if cfg["enabled"] and cfg["remote"] and cfg["schedule"] != "manual" and has:
-            print("Backing up your latest changes before exit…")
-            run(db_path)
+            print("Backing up your latest changes before exit (at most %d s)…" % EXIT_BUDGET_SECONDS)
+            t = run_in_background(db_path)
+            t.join(EXIT_BUDGET_SECONDS)
+            if t.is_alive():
+                print("  still uploading — stopped; it will finish the next time you start the app. "
+                      "Your changes are safe on this computer.")
     except Exception:  # noqa: BLE001
         pass
 

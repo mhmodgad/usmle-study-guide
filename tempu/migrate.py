@@ -241,6 +241,7 @@ def _startup_checks(data_dir):
     try:
         conn = dbmod.connect(os.path.join(data_dir, "user.db"), journal=False)
         dbmod.ensure_user_tables(conn)
+        history.compact(conn)              # stored texts no version refers to any more
         blobmod.cleanup_temp(data_dir)
         blobmod.index_untracked(conn, data_dir)
         conn.close()

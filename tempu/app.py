@@ -42,6 +42,43 @@ NAV_ITEMS = [
 ]
 
 
+def _hostname(h):
+    """'127.0.0.1:5077' -> '127.0.0.1', '[::1]:5077' -> '::1', 'localhost' -> 'localhost'."""
+    h = h.strip().lower()
+    if h.startswith("["):
+        return h[1:h.find("]")] if "]" in h else h[1:]
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
+def _host_ok(host):
+    """localhost, or an IP address (e.g. your LAN IP when serving to a phone).
+    Extra names can be allowed with TEMPU_ALLOWED_HOSTS=name1,name2."""
+    import ipaddress
+    if host in ("localhost", "") or host.endswith(".localhost"):
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    extra = {h.strip().lower() for h in os.environ.get("TEMPU_ALLOWED_HOSTS", "").split(",") if h.strip()}
+    return host in extra
+
+
+def _same_site(req):
+    site = req.headers.get("Sec-Fetch-Site")
+    if site and site not in ("same-origin", "none"):     # "none" = typed in the address bar
+        return False
+    origin = req.headers.get("Origin")
+    if origin and origin != "null":
+        from urllib.parse import urlsplit
+        if urlsplit(origin).netloc.lower() != (req.host or "").lower():
+            return False
+    elif origin == "null":
+        return False
+    return True
+
+
 def create_app(db_path=None, assets_dir=None):
     app = Flask(__name__,
                 template_folder=os.path.join(PROJECT, "templates"),
@@ -67,9 +104,42 @@ def create_app(db_path=None, assets_dir=None):
         from . import loader as _loader
         _loader.ensure_render_current(app.config["DB_PATH"])
 
+    from . import ui as uimod
+    uimod.install(app)
+
+    @app.before_request
+    def _guard():
+        """This app has no login: it trusts whoever can reach it. So it refuses
+        (1) requests addressed to a host NAME other than localhost — that is how a
+            web page uses DNS rebinding to read a local app — and
+        (2) changes requested by another website (cross-site POST/PUT/PATCH/DELETE,
+            and layout switches), which browsers send without asking first."""
+        if not _host_ok(_hostname(request.host or "")):
+            abort(403)
+        changes = request.method in ("POST", "PUT", "PATCH", "DELETE") or request.path.startswith("/ui/")
+        if changes and not _same_site(request):
+            abort(403)
+
     @app.before_request
     def _open_db():
         g.db = dbmod.connect(app.config["DB_PATH"])
+        try:
+            r = g.db.execute("SELECT value FROM settings WHERE key='ui'").fetchone()
+            g.ui = r[0] if r and r[0] in uimod.LAYOUTS else "classic"
+        except Exception:  # noqa: BLE001
+            g.ui = "classic"
+
+    @app.route("/ui/<mode>")
+    def switch_ui(mode):
+        """Switch layout (classic <-> new) and go back to the page you were on."""
+        if mode not in uimod.LAYOUTS:
+            abort(404)
+        g.db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('ui',?)", (mode,))
+        g.db.commit()
+        nxt = request.args.get("next") or "/dashboard"
+        if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt or any(ord(ch) < 32 for ch in nxt):
+            nxt = "/dashboard"
+        return redirect(nxt.rstrip("?") or "/dashboard")
 
     @app.teardown_request
     def _close_db(exc):
@@ -102,6 +172,13 @@ def create_app(db_path=None, assets_dir=None):
             "theme": settings.get("theme", "dark"),
             "display_name": settings.get("displayName", "Student"),
             "initials": settings.get("initials", "ST"),
+            "ui": getattr(g, "ui", "classic"),
+            "ui_new": getattr(g, "ui", "classic") == "new",
+            # new layout: Mentorship, Ask TEMPU, Tutoring, Billing, locked libraries and the
+            # captured notifications (live-site only) are hidden unless switched on in Preferences.
+            # The classic layout always shows them, as before.
+            "online_features": (getattr(g, "ui", "classic") != "new"
+                                or settings.get("showOnlineFeatures", "false") == "true"),
             "notif_unread": service.notif_unread(),
             "embed": request.args.get("embed") == "1",
             "icon_web": service.icon_web_path,
@@ -150,6 +227,8 @@ def create_app(db_path=None, assets_dir=None):
             abort(404)
         resp = send_from_directory(os.path.dirname(full), name, max_age=31536000)
         resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
         return resp
 
     # images added before the upgrade, at their old /uploads/ address

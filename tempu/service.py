@@ -310,3 +310,47 @@ def section_neighbours(section_id):
     prev = dict(order[i - 1]) if i > 0 else None
     nxt = dict(order[i + 1]) if i + 1 < len(order) else None
     return prev, nxt
+
+
+# ------------------------------------------------------------------ cards you made
+def _esc(t):
+    import html as _h
+    return _h.escape(t or "").replace("\n", "<br>")
+
+
+def render_my_card(row):
+    """A card you made while reading -> the same shape as render_card()."""
+    topic_title = row["topic_title"] if "topic_title" in row.keys() else None
+    front = ('<div class="my-card"><p class="my-card-q">%s</p></div>' % _esc(row["front"]))
+    back = ('<div class="my-card"><p class="my-card-q">%s</p><hr><p class="my-card-a">%s</p>%s</div>'
+            % (_esc(row["front"]), _esc(row["back"]),
+               ('<blockquote class="my-card-src">%s</blockquote>' % _esc(row["quote"])) if row["quote"] else ""))
+    return {"id": row["id"], "topic_id": row["topic_id"], "topic_title": topic_title, "note_id": None,
+            "kind": "mine", "ordinal": 0, "is_beta": False, "front_html": front, "back_html": back,
+            "has_back": True, "front_text": row["front"], "mine": True}
+
+
+def my_cards_for_scope(scope, scope_id, now=None):
+    base = ("SELECT m.*, COALESCE(e.title, t.title) topic_title FROM my_cards m "
+            "LEFT JOIN topics t ON t.id=m.topic_id LEFT JOIN topic_edits e ON e.topic_id=m.topic_id ")
+    if scope == "topic":
+        q, a = base + "WHERE m.topic_id=?", [scope_id]
+    elif scope == "section":
+        q, a = base + "WHERE t.section_id=?", [scope_id]
+    elif scope == "chapter":
+        q, a = base + "WHERE t.section_id IN (SELECT id FROM sections WHERE chapter_id=?)", [scope_id]
+    elif scope == "deck":
+        q, a = base + "JOIN deck_cards dc ON dc.card_id=m.id WHERE dc.deck_id=?", [scope_id]
+    elif scope == "due":
+        q, a = base + "JOIN card_reviews r ON r.card_id=m.id WHERE r.due_at<=?", [now]
+    elif scope == "weak":
+        q = base + "JOIN card_reviews r ON r.card_id=m.id WHERE (r.lapses>0 OR r.last_rating=1)"
+        q, a = (q + " AND m.topic_id=?", [scope_id]) if scope_id else (q, [])
+    elif scope == "mine":
+        q, a = base + "WHERE 1=1", []
+    else:
+        q, a = base + "WHERE 1=1", []
+    try:
+        return g.db.execute(q + " ORDER BY m.created_at", a).fetchall()
+    except Exception:  # noqa: BLE001 - table missing on a very old db
+        return []

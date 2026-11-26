@@ -44,6 +44,11 @@ def _cards_for_scope(scope, scope_id, limit=None, order="ordinal"):
                 "JOIN cards c ON c.id=r.card_id LEFT JOIN topics t ON t.id=c.topic_id ")
         where = "WHERE r.due_at<=?"
         params = [_now()]
+    elif scope == "weak":   # cards you forgot at least once, or last answered "Again"
+        base = ("SELECT c.*, t.title topic_title FROM card_reviews r "
+                "JOIN cards c ON c.id=r.card_id LEFT JOIN topics t ON t.id=c.topic_id ")
+        where = "WHERE (r.lapses>0 OR r.last_rating=1)" + (" AND c.topic_id=?" if scope_id else "")
+        params = [scope_id] if scope_id else []
     else:  # all (whole 2CK library)
         where = "WHERE c.library_id=(SELECT id FROM libraries WHERE exam_scope='step2ck')"
     sql = base + where + " ORDER BY " + (
@@ -59,8 +64,14 @@ def cards():
     scope_id = request.args.get("id", "")
     limit = request.args.get("limit")
     order = request.args.get("order", "ordinal")
-    rows = _cards_for_scope(scope, scope_id, limit=limit, order=order)
+    rows = [] if scope == "mine" else _cards_for_scope(scope, scope_id, limit=limit, order=order)
     out = [S.render_card(r) for r in rows]
+    out += [S.render_my_card(r) for r in S.my_cards_for_scope(scope, scope_id, _now())]
+    if order != "ordinal":
+        import random as _r
+        _r.shuffle(out)
+    if limit:
+        out = out[:int(limit)]
     # attach review state
     ids = [c["id"] for c in out]
     rev = {}
@@ -92,11 +103,17 @@ def cards():
 
 @bp.route("/review", methods=["POST"])
 def review():
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
     card_id = data.get("card_id")
-    rating = int(data.get("rating", 3))
-    if not card_id:
-        abort(400)
+    try:
+        rating = int(data.get("rating"))
+    except (TypeError, ValueError):
+        rating = 0
+    if not card_id or rating not in (1, 2, 3, 4):
+        return jsonify({"ok": False, "error": "card_id and a rating 1-4 are required"}), 400
+    if not (g.db.execute("SELECT 1 FROM cards WHERE id=?", (card_id,)).fetchone()
+            or g.db.execute("SELECT 1 FROM my_cards WHERE id=?", (card_id,)).fetchone()):
+        return jsonify({"ok": False, "error": "no such card"}), 404
     row = g.db.execute("SELECT * FROM card_reviews WHERE card_id=?", (card_id,)).fetchone()
     upd = srs.schedule(row, rating)
     g.db.execute(
@@ -109,7 +126,8 @@ def review():
         (card_id, upd["state"], upd["reps"], upd["lapses"], upd["ease"],
          upd["interval_days"], upd["due_at"], upd["last_rating"], upd["last_reviewed_at"]))
     g.db.commit()
-    return jsonify({"ok": True, "review": upd})
+    # what each button would do NOW (the study screen shows these if the card comes back)
+    return jsonify({"ok": True, "review": upd, "previews": srs.preview(upd)})
 
 
 # ------------------------------------------------------------- progress
@@ -127,7 +145,10 @@ def progress_topic():
     g.db.execute(
         "INSERT INTO progress(topic_id,completed,reopened,completed_at,last_opened_at) "
         "VALUES(?,?,?,?,?) ON CONFLICT(topic_id) DO UPDATE SET completed=excluded.completed,"
-        "reopened=excluded.reopened,completed_at=excluded.completed_at,"
+        "reopened=excluded.reopened,"
+        # completing an already-completed topic keeps the day it was first completed
+        "completed_at=CASE WHEN excluded.completed=1 AND progress.completed=1 THEN progress.completed_at "
+        "ELSE excluded.completed_at END,"
         "last_opened_at=excluded.last_opened_at",
         (tid, completed, reopened, _now() if completed else None, _now()))
     g.db.commit()
@@ -146,7 +167,11 @@ def progress_section():
         g.db.execute(
             "INSERT INTO progress(topic_id,completed,completed_at,last_opened_at) "
             "VALUES(?,?,?,?) ON CONFLICT(topic_id) DO UPDATE SET completed=excluded.completed,"
-            "completed_at=excluded.completed_at,last_opened_at=excluded.last_opened_at",
+            "completed_at=CASE WHEN excluded.completed=1 AND progress.completed=1 THEN progress.completed_at "
+            "ELSE excluded.completed_at END,"
+            "reopened=COALESCE(progress.reopened,0) + CASE WHEN progress.completed=1 AND excluded.completed=0 "
+            "THEN 1 ELSE 0 END,"
+            "last_opened_at=excluded.last_opened_at",
             (tid, completed, _now() if completed else None, _now()))
     g.db.commit()
     return jsonify({"ok": True, "topics": len(tids), "completed": bool(completed)})
@@ -179,9 +204,13 @@ def topic_note(topic_id):
         g.db.execute("DELETE FROM topic_notes WHERE topic_id=?", (topic_id,))
         g.db.commit()
         return jsonify({"ok": True})
-    data = request.get_json(force=True)
-    body = data.get("body_html", "")
-    plain = data.get("plain_text", "")
+    data = request.get_json(force=True) or {}
+    body = _san.clean_html(data.get("body_html") or "")
+    plain = (data.get("plain_text") or "").strip() or _san.plain_text(body)
+    if not plain and "<img" not in body:          # an emptied note is a deleted note
+        g.db.execute("DELETE FROM topic_notes WHERE topic_id=?", (topic_id,))
+        g.db.commit()
+        return jsonify({"ok": True, "deleted": True, "updated_at": _now()})
     g.db.execute(
         "INSERT INTO topic_notes(topic_id,body_html,plain_text,updated_at) VALUES(?,?,?,?) "
         "ON CONFLICT(topic_id) DO UPDATE SET body_html=excluded.body_html,"
@@ -310,37 +339,38 @@ def deck_delete(deck_id):
 @bp.route("/collections", methods=["GET"])
 def list_collections():
     rows = g.db.execute(
-        "SELECT id, title, item_count FROM collections WHERE kind='personal' "
-        "ORDER BY created_at DESC").fetchall()
+        "SELECT m.id, m.title, (SELECT COUNT(*) FROM my_collection_items i WHERE i.collection_id=m.id) item_count "
+        "FROM my_collections m ORDER BY m.created_at DESC, m.rowid DESC").fetchall()
     return jsonify({"collections": [dict(r) for r in rows]})
 
 
 @bp.route("/collections", methods=["POST"])
 def create_collection():
-    d = request.get_json(force=True)
+    d = request.get_json(force=True) or {}
+    title = (d.get("title") or "").strip()[:200] or "New collection"
     cid = _uid()
-    g.db.execute(
-        "INSERT INTO collections(id,kind,title,description,exam_scope,item_count,share_state,"
-        "created_at) VALUES(?,?,?,?,?,?,?,?)",
-        (cid, "personal", d.get("title", "New collection"), d.get("description"),
-         "step2ck", 0, "private", _now()))
+    g.db.execute("INSERT INTO my_collections(id,title,description,exam_scope,share_state,created_at) "
+                 "VALUES(?,?,?,?,?,?)", (cid, title, d.get("description"), "step2ck", "private", _now()))
     g.db.commit()
     return jsonify({"ok": True, "id": cid})
 
 
 @bp.route("/collections/<cid>/items", methods=["POST"])
 def add_collection_item(cid):
-    d = request.get_json(force=True)
-    g.db.execute(
-        "INSERT INTO collection_items(collection_id,item_type,topic_id,section_id,chapter_id,"
-        "entry_id,sort_order) VALUES(?,?,?,?,?,?,?)",
-        (cid, d.get("item_type", "topic"), d.get("topic_id"), d.get("section_id"),
-         d.get("chapter_id"), _uid(),
-         g.db.execute("SELECT COUNT(*) n FROM collection_items WHERE collection_id=?",
-                      (cid,)).fetchone()["n"]))
-    g.db.execute("UPDATE collections SET item_count=item_count+1 WHERE id=?", (cid,))
+    d = request.get_json(force=True) or {}
+    if not g.db.execute("SELECT 1 FROM my_collections WHERE id=?", (cid,)).fetchone():
+        return jsonify({"ok": False, "error": "That collection doesn't exist."}), 404
+    kind = d.get("item_type") or "topic"
+    if kind not in ("topic", "section") or not (d.get("topic_id") if kind == "topic" else d.get("section_id")):
+        return jsonify({"ok": False, "error": "Say which topic or section to add."}), 400
+    cur = g.db.execute(
+        "INSERT OR IGNORE INTO my_collection_items(collection_id,item_type,topic_id,section_id,chapter_id,"
+        "entry_id,sort_order,added_at) VALUES(?,?,?,?,?,?,"
+        "(SELECT COALESCE(MAX(sort_order)+1,0) FROM my_collection_items WHERE collection_id=?),?)",
+        (cid, kind, d.get("topic_id") if kind == "topic" else None, d.get("section_id"),
+         d.get("chapter_id"), _uid(), cid, _now()))
     g.db.commit()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "added": cur.rowcount == 1})      # added=false: it was already there
 
 
 # ------------------------------------------------------------- chapter pins
@@ -364,11 +394,17 @@ def pin():
 # ------------------------------------------------------------- consistency
 @bp.route("/consistency/log", methods=["POST"])
 def consistency_log():
-    d = request.get_json(force=True)
+    d = request.get_json(force=True) or {}
     day = d.get("day") or datetime.date.today().isoformat()
-    eng = int(d.get("englishMinutes", 0)) * 60
-    ara = int(d.get("arabicMinutes", 0)) * 60
-    q = int(d.get("questionsAnswered", 0))
+    try:
+        datetime.date.fromisoformat(day)
+        eng = int(d.get("englishMinutes") or 0) * 60
+        ara = int(d.get("arabicMinutes") or 0) * 60
+        q = int(d.get("questionsAnswered") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Use a date like 2026-11-26 and whole numbers."}), 400
+    if min(eng, ara, q) < 0 or max(eng, ara) > 24 * 3600 or q > 5000:
+        return jsonify({"ok": False, "error": "Numbers must be between 0 and one day's worth."}), 400
     # credit: 1 unit = 15 min english = 40 min arabic = 5 questions
     credit = eng + round(ara * (15 / 40)) + q * (15 * 60 / 5)
     g.db.execute(
@@ -379,7 +415,7 @@ def consistency_log():
         "arabic_video_seconds=arabic_video_seconds+excluded.arabic_video_seconds,"
         "questions_answered=questions_answered+excluded.questions_answered,"
         "credit_seconds=credit_seconds+excluded.credit_seconds",
-        (day, eng, ara, q, eng, int(credit)))
+        (day, eng, ara, q, 0, int(credit)))
     g.db.commit()
     return jsonify({"ok": True})
 
@@ -456,26 +492,34 @@ def search():
     q = (request.args.get("q") or "").strip()
     if not q:
         return jsonify({"items": []})
-    items = []
-    try:
-        rows = g.db.execute(
-            "SELECT ref, title, chapter_id, section_id, library_id, "
-            "snippet(search_fts,3,'<mark>','</mark>','…',8) snip "
-            "FROM search_fts WHERE search_fts MATCH ? ORDER BY rank LIMIT 20",
-            (q + "*",)).fetchall()
-        for r in rows:
-            items.append(_search_item(r["ref"], r["title"], r["section_id"],
-                                      r["chapter_id"], r["library_id"], r["snip"]))
-    except Exception:
+    import html as _h
+    import re as _re
+    items, rows = [], []
+    # words only, each quoted: symbols like < " ( - used to make the query invalid
+    toks = _re.findall(r"\w+", q, flags=_re.UNICODE)
+    if toks:
+        try:
+            rows = g.db.execute(
+                "SELECT ref, title, chapter_id, section_id, library_id, "
+                "snippet(search_fts,3,'\x02','\x03','…',8) snip "
+                "FROM search_fts WHERE search_fts MATCH ? ORDER BY rank LIMIT 20",
+                (" ".join('"%s"*' % t for t in toks),)).fetchall()
+        except Exception:  # noqa: BLE001 - no FTS5: LIKE below
+            rows = []
+    for r in rows:
+        snip = _h.escape(r["snip"] or "").replace("\x02", "<mark>").replace("\x03", "</mark>")
+        items.append(_search_item(r["ref"], r["title"], r["section_id"], r["chapter_id"], r["library_id"], snip))
+    if not items:
         like = f"%{q}%"
-        rows = g.db.execute(
-            "SELECT t.id ref, t.title, s.id section_id, s.chapter_id, c.library_id "
-            "FROM topics t JOIN sections s ON t.section_id=s.id "
-            "JOIN chapters c ON s.chapter_id=c.id "
-            "WHERE t.title LIKE ? OR t.plain_text LIKE ? LIMIT 20", (like, like)).fetchall()
-        for r in rows:
-            items.append(_search_item(r["ref"], r["title"], r["section_id"],
-                                      r["chapter_id"], r["library_id"], ""))
+        for r in g.db.execute(
+                "SELECT t.id ref, COALESCE(e.title,t.title) title, COALESCE(e.plain_text,t.plain_text) body, "
+                "s.id section_id, s.chapter_id, c.library_id "
+                "FROM topics t JOIN sections s ON t.section_id=s.id JOIN chapters c ON s.chapter_id=c.id "
+                "LEFT JOIN topic_edits e ON e.topic_id=t.id "
+                "WHERE COALESCE(e.title,t.title) LIKE ? OR COALESCE(e.plain_text,t.plain_text) LIKE ? LIMIT 20",
+                (like, like)).fetchall():
+            items.append(_search_item(r["ref"], r["title"], r["section_id"], r["chapter_id"], r["library_id"],
+                                      _snip(r["body"], q, 50)))
     return jsonify({"items": items})
 
 
@@ -753,6 +797,9 @@ def structure_create(kind):
     if not parent:
         return jsonify({"error": "parent_id required"}), 400
     title = (d.get("title") or "").strip() or "New " + kind
+    prob = _st.parent_problem(g.db, kind, parent)
+    if prob:
+        return jsonify({"error": prob}), 400
     with _hist.Change(g.db, "Added %s '%s' to '%s'" % (kind, title, _parent_name(kind, parent)),
                       kind="structure", scope=(kind, None)) as ch:
         new_id = _st.create(g.db, kind, parent, d.get("title"), d.get("after_id"), d.get("icon_path"))
@@ -787,6 +834,9 @@ def structure_update(kind, item_id):
         if not row:
             abort(404)
         dest = d.get("parent_id") or row["p"]
+        prob = _st.parent_problem(g.db, kind, dest)
+        if prob:
+            return jsonify({"error": prob}), 400
         parts.append(("Moved %s '%s' to '%s'" % (kind, old, _parent_name(kind, dest)))
                      if dest != row["p"] else "Reordered '%s'" % old)
     label = "; ".join(parts) or "Changed '%s'" % old
@@ -833,6 +883,9 @@ def structure_trash():
 @bp.route("/structure/<kind>/<item_id>/restore", methods=["POST"])
 def structure_restore(kind, item_id):
     _kind(kind)
+    prob = _st.restore_problem(g.db, kind, item_id)
+    if prob:
+        return jsonify({"ok": False, "error": prob}), 409
     with _hist.Change(g.db, "Restored %s '%s' from the trash" % (kind, _name(kind, item_id)),
                       kind="structure", scope=(kind, item_id)) as ch:
         ok = _st.restore(g.db, kind, item_id)
@@ -903,3 +956,183 @@ def structure_icons():
                           "OR icon_path LIKE '/uploads/%'"):
         add(r[0], "Your uploads")
     return jsonify(out)
+
+
+# ------------------------------------------------------------- cards you make while reading
+FROM_READING_DECK = "from-reading"
+
+
+def _ensure_reading_deck():
+    if not g.db.execute("SELECT 1 FROM decks WHERE id=?", (FROM_READING_DECK,)).fetchone():
+        g.db.execute("INSERT INTO decks(id,name,color_key,created_at) VALUES(?,?,?,?)",
+                     (FROM_READING_DECK, "From reading", "blue", _now()))
+
+
+@bp.route("/my-cards", methods=["GET", "POST"])
+def my_cards():
+    if request.method == "GET":
+        return jsonify([S.render_my_card(r) for r in S.my_cards_for_scope(
+            request.args.get("scope", "mine"), request.args.get("id", ""), _now())])
+    d = request.get_json(force=True) or {}
+    front, back = (d.get("front") or "").strip(), (d.get("back") or "").strip()
+    if not front or not back:
+        return jsonify({"error": "A card needs a question and an answer."}), 400
+    cid = "my-" + _uid()
+    title = g.db.execute("SELECT title FROM topics WHERE id=?", (d.get("topic_id"),)).fetchone()
+    label = "Made a flashcard%s" % (" from '%s'" % title["title"] if title else "")
+    with _hist.Change(g.db, label, kind="structure", scope=("topic", d.get("topic_id"))) as ch:
+        g.db.execute("INSERT INTO my_cards(id,topic_id,front,back,quote,source,created_at,updated_at) "
+                     "VALUES(?,?,?,?,?,?,?,?)", (cid, d.get("topic_id"), front[:2000], back[:2000],
+                                                 (d.get("quote") or "")[:2000], d.get("source") or "selection",
+                                                 _now(), _now()))
+        deck = d.get("deck_id") or FROM_READING_DECK
+        if deck == FROM_READING_DECK:
+            _ensure_reading_deck()
+        g.db.execute("INSERT OR IGNORE INTO deck_cards(deck_id,card_id,added_at) VALUES(?,?,?)", (deck, cid, _now()))
+    return jsonify({"ok": True, "id": cid, "deck_id": deck, "changeset": ch.info()})
+
+
+@bp.route("/my-cards/<cid>", methods=["PATCH", "DELETE"])
+def my_card(cid):
+    if not g.db.execute("SELECT 1 FROM my_cards WHERE id=?", (cid,)).fetchone():
+        abort(404)
+    if request.method == "DELETE":
+        with _hist.Change(g.db, "Deleted a flashcard you made", kind="structure") as ch:
+            g.db.execute("DELETE FROM deck_cards WHERE card_id=?", (cid,))
+            g.db.execute("DELETE FROM my_cards WHERE id=?", (cid,))
+        return jsonify({"ok": True, "changeset": ch.info()})
+    d = request.get_json(force=True) or {}
+    with _hist.Change(g.db, "Edited a flashcard you made", kind="structure") as ch:
+        for f in ("front", "back"):
+            if (d.get(f) or "").strip():
+                g.db.execute(f"UPDATE my_cards SET {f}=?, updated_at=? WHERE id=?", (d[f].strip()[:2000], _now(), cid))
+    return jsonify({"ok": True, "changeset": ch.info()})
+
+
+# ------------------------------------------------------------- search everything (new layout)
+def _snip(text, q, width=70):
+    import html as _h
+    t = " ".join((text or "").split())
+    i = t.lower().find(q.lower())
+    if i < 0:
+        return _h.escape(t[:width * 2]) + ("…" if len(t) > width * 2 else "")
+    a, b = max(0, i - width), min(len(t), i + len(q) + width)
+    return (("…" if a else "") + _h.escape(t[a:i]) + "<mark>" + _h.escape(t[i:i + len(q)]) + "</mark>"
+            + _h.escape(t[i + len(q):b]) + ("…" if b < len(t) else ""))
+
+
+def _reader_href(row, block=None):
+    base = "/libraries/%s/chapters/%s/sections/%s" % (row["library_id"], row["chapter_id"], row["section_id"])
+    return base + (("#block-" + block) if block else ("#topic-" + row["topic_id"]))
+
+
+@bp.route("/search/all")
+def search_all():
+    """Topics, your notes & highlights, and flashcards in one search.
+    ``kind`` = all | topics | notes | cards, ``chapter`` limits to one chapter."""
+    import html as _h
+    import re as _re
+    q = (request.args.get("q") or "").strip()
+    kind = request.args.get("kind", "all")
+    chapter = request.args.get("chapter") or None
+    out = {"q": q, "topics": [], "notes": [], "cards": []}
+    if len(q) < 2:
+        return jsonify(out)
+    like = f"%{q}%"
+    loc = ("SELECT t.id topic_id, COALESCE(e.title,t.title) topic_title, s.id section_id, s.title section_title, "
+           "s.chapter_id, ch.title chapter_title, ch.library_id FROM topics t JOIN sections s ON s.id=t.section_id "
+           "JOIN chapters ch ON ch.id=s.chapter_id LEFT JOIN topic_edits e ON e.topic_id=t.id ")
+    chf = " AND s.chapter_id=?" if chapter else ""
+    cha = [chapter] if chapter else []
+
+    if kind in ("all", "topics"):
+        toks = _re.findall(r"\w+", q, flags=_re.UNICODE)
+        rows = []
+        if toks:
+            try:
+                fts = " ".join('"%s"*' % t for t in toks)
+                rows = g.db.execute(
+                    "SELECT f.ref topic_id, snippet(search_fts,3,'\x02','\x03','…',12) snip FROM search_fts f "
+                    "WHERE search_fts MATCH ? AND f.kind='topic'" + (" AND f.chapter_id=?" if chapter else "") +
+                    " ORDER BY rank LIMIT 40", [fts] + cha).fetchall()
+            except Exception:  # noqa: BLE001
+                rows = []
+        if not rows:
+            rows = [{"topic_id": r["id"], "snip": None} for r in g.db.execute(
+                "SELECT t.id FROM topics t JOIN sections s ON s.id=t.section_id LEFT JOIN topic_edits e ON e.topic_id=t.id "
+                "WHERE (COALESCE(e.title,t.title) LIKE ? OR COALESCE(e.plain_text,t.plain_text) LIKE ?)" + chf + " LIMIT 40",
+                [like, like] + cha)]
+        for r in rows:
+            l = g.db.execute(loc + "WHERE t.id=?", (r["topic_id"],)).fetchone()
+            if not l:
+                continue
+            snip = (_h.escape(r["snip"]).replace("\x02", "<mark>").replace("\x03", "</mark>") if r["snip"] else "")
+            out["topics"].append({"title": l["topic_title"], "where": f"{l['chapter_title']} · {l['section_title']}",
+                                  "snippet": snip, "href": _reader_href(l)})
+
+    if kind in ("all", "notes"):
+        for r in g.db.execute(loc.replace("SELECT ", "SELECT n.plain_text body, n.updated_at at, ", 1).replace(
+                "FROM topics t", "FROM topic_notes n JOIN topics t ON t.id=n.topic_id", 1) +
+                "WHERE n.plain_text LIKE ?" + chf + " ORDER BY n.updated_at DESC LIMIT 30", [like] + cha):
+            out["notes"].append({"type": "Topic note", "title": r["topic_title"], "where": f"{r['chapter_title']} · {r['section_title']}",
+                                 "snippet": _snip(r["body"], q), "href": _reader_href(r)})
+        for r in g.db.execute(loc.replace("SELECT ", "SELECT n.note_text, n.selected_text, n.start_block_id, ", 1).replace(
+                "FROM topics t", "FROM inline_notes n JOIN topics t ON t.id=n.topic_id", 1) +
+                "WHERE (n.note_text LIKE ? OR n.selected_text LIKE ?)" + chf + " LIMIT 30", [like, like] + cha):
+            body = r["note_text"] if q.lower() in (r["note_text"] or "").lower() else r["selected_text"]
+            out["notes"].append({"type": "Note on a passage", "title": r["topic_title"], "where": f"{r['chapter_title']} · {r['section_title']}",
+                                 "snippet": _snip(body, q), "href": _reader_href(r, r["start_block_id"])})
+        for r in g.db.execute(loc.replace("SELECT ", "SELECT h.selected_text, h.start_block_id, ", 1).replace(
+                "FROM topics t", "FROM highlights h JOIN topics t ON t.id=h.topic_id", 1) +
+                "WHERE h.selected_text LIKE ?" + chf + " LIMIT 30", [like] + cha):
+            out["notes"].append({"type": "Highlight", "title": r["topic_title"], "where": f"{r['chapter_title']} · {r['section_title']}",
+                                 "snippet": _snip(r["selected_text"], q), "href": _reader_href(r, r["start_block_id"])})
+
+    if kind in ("all", "cards"):
+        for r in g.db.execute(loc.replace("SELECT ", "SELECT c.front_text, c.back_text, ", 1).replace(
+                "FROM topics t", "FROM cards c JOIN topics t ON t.id=c.topic_id", 1) +
+                "WHERE (c.front_text LIKE ? OR c.back_text LIKE ?)" + chf + " LIMIT 30", [like, like] + cha):
+            body = r["front_text"] if q.lower() in (r["front_text"] or "").lower() else r["back_text"]
+            out["cards"].append({"type": "Library card", "title": r["topic_title"], "where": r["chapter_title"],
+                                 "snippet": _snip(body, q),
+                                 "href": "/flashcards/review?scope=topic&id=%s&title=%s" % (r["topic_id"], r["topic_title"] or "")})
+        for r in g.db.execute(loc.replace("SELECT ", "SELECT m.front, m.back, ", 1).replace(
+                "FROM topics t", "FROM my_cards m JOIN topics t ON t.id=m.topic_id", 1) +
+                "WHERE (m.front LIKE ? OR m.back LIKE ?)" + chf + " LIMIT 30", [like, like] + cha):
+            body = r["front"] if q.lower() in (r["front"] or "").lower() else r["back"]
+            out["cards"].append({"type": "Your card", "title": r["topic_title"], "where": r["chapter_title"],
+                                 "snippet": _snip(body, q),
+                                 "href": "/flashcards/review?scope=topic&id=%s&title=%s" % (r["topic_id"], r["topic_title"] or "")})
+    return jsonify(out)
+
+
+# ------------------------------------------------------------- one day of study (new layout heatmap)
+@bp.route("/day/<day>")
+def day_detail(day):
+    import re as _re
+    if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        return jsonify({"error": "bad day"}), 400
+    log = g.db.execute("SELECT * FROM study_log WHERE day=?", (day,)).fetchone()
+    done = g.db.execute(
+        "SELECT p.topic_id, COALESCE(e.title,t.title) title, s.id section_id, s.title section_title, "
+        "s.chapter_id, c.library_id FROM progress p JOIN topics t ON t.id=p.topic_id "
+        "JOIN sections s ON s.id=t.section_id JOIN chapters c ON c.id=s.chapter_id "
+        "LEFT JOIN topic_edits e ON e.topic_id=p.topic_id "
+        "WHERE p.completed=1 AND date(p.completed_at,'localtime')=? ORDER BY p.completed_at LIMIT 50", (day,)).fetchall()
+    # times are stored in UTC; the heatmap's days are your local days
+    reviewed = g.db.execute(
+        "SELECT COUNT(*) n FROM card_reviews WHERE date(last_reviewed_at,'localtime')=?", (day,)).fetchone()["n"]
+    changes = g.db.execute(
+        "SELECT label FROM changesets WHERE date(created_at,'localtime')=? AND kind NOT IN ('import') "
+        "ORDER BY created_at DESC LIMIT 8", (day,)).fetchall()
+    n_changes = g.db.execute("SELECT COUNT(*) n FROM changesets WHERE date(created_at,'localtime')=? "
+                             "AND kind NOT IN ('import')", (day,)).fetchone()["n"]
+    return jsonify({
+        "day": day,
+        "minutes": round(((log["credit_seconds"] if log else 0) or 0) / 60),
+        "completed": [{"title": r["title"], "where": r["section_title"],
+                       "href": "/libraries/%s/chapters/%s/sections/%s#topic-%s" % (r["library_id"], r["chapter_id"], r["section_id"], r["topic_id"])}
+                      for r in done],
+        "cards_last_reviewed": reviewed,
+        "changes": [r["label"] for r in changes], "n_changes": n_changes,
+    })

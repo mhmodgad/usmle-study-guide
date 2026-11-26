@@ -100,3 +100,124 @@ def test_backup_off_does_nothing(env):
     assert B._due(conn, env["db"], cfg) is False
     conn.close()
     assert B.run(env["db"])["ok"] == 0
+
+
+@pytest.mark.skipif(not shutil.which("rclone"), reason="rclone not installed")
+def test_finished_backup_is_not_pending_again(env, tmp_path):
+    """Regression: the backup's own writes (log row, upload stamps, settings) made
+    every backup look 'pending' again, so it re-ran every 10 minutes forever."""
+    db, c, ids = env["db"], env["client"], env["ids"]
+    c.post("/api/progress/topic", json={"topic_id": ids["topics"][0], "completed": True})
+    remote = str(tmp_path / "remote" / "tempu-backup")
+    conn = dbmod.connect(db, journal=False)
+    B.save_config(conn, {"enabled": True, "remote": remote})
+    conn.close()
+    assert B.run(db)["ok"] == 1
+    conn = dbmod.connect(db, journal=False)
+    has, n, files = B.pending(conn, db)
+    assert (has, files) == (False, 0)
+    assert B.status(conn, db)["state"] == "ok"
+    assert B._due(conn, db, B.get_config(conn)) is False
+    B.save_config(conn, {"keep_recent": 5})             # changing backup settings is not "your data"
+    assert B.pending(conn, db)[0] is False
+    conn.close()
+    c.post("/api/progress/topic", json={"topic_id": ids["topics"][1], "completed": True})   # real change
+    conn = dbmod.connect(db, journal=False)
+    assert B.pending(conn, db)[0] is True
+    assert B.status(conn, db)["state"] == "pending"
+    assert B._due(conn, db, B.get_config(conn)) is False   # quiet period after a change
+    conn.close()
+    # one listing call, details on demand
+    d = c.get("/api/backup/snapshots").get_json()
+    assert d["ok"] and len(d["snapshots"]) == 1 and d["snapshots"][0]["bytes"] > 0
+    info = c.get("/api/backup/snapshots/" + d["snapshots"][0]["name"]).get_json()
+    assert info["ok"] and "study" in info["categories"]
+    assert c.get("/api/backup/snapshots/..%2Fsecret").status_code in (400, 404)
+
+
+def test_back_up_now_without_a_place_logs_nothing(env):
+    c = env["client"]
+    r = c.post("/api/backup/run")
+    assert r.status_code == 400
+    conn = dbmod.connect(env["db"], journal=False)
+    assert conn.execute("SELECT COUNT(*) FROM backup_log").fetchone()[0] == 0
+    assert B.status(conn, env["db"])["state"] == "off"
+    conn.close()
+    assert B.run(env["db"], force=True)["ok"] == 0          # direct call: refused, not logged as a failure
+    conn = dbmod.connect(env["db"], journal=False)
+    assert conn.execute("SELECT COUNT(*) FROM backup_log").fetchone()[0] == 0
+    conn.close()
+
+
+def test_connect_status_expires_and_restore_waits_for_backup(env, monkeypatch):
+    B._set_connect(state="error", message="boom")
+    assert B.connect_status()["state"] == "error"
+    monkeypatch.setattr(B, "CONNECT_STALE_SECONDS", -1)
+    assert B.connect_status()["state"] == "idle"
+    assert B._RUN_LOCK.acquire(blocking=False)
+    try:
+        assert B.restore(env["db"], "x")["ok"] is False      # never overlaps a running backup
+    finally:
+        B._RUN_LOCK.release()
+
+
+PNG2 = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
+        b"\x00\x00\x00\x0cIDATx\x9cc```\x00\x00\x00\x04\x00\x01\xf6\x178U\x00\x00\x00\x00IEND\xaeB`\x82")
+
+
+@pytest.mark.skipif(not shutil.which("rclone"), reason="rclone not installed")
+def test_files_off_or_missing_never_keep_backup_pending(env, tmp_path):
+    """With 'Files you added' unticked (or a file gone from disk), files that are
+    never uploaded used to keep the backup 'pending' and re-running forever."""
+    db, c = env["db"], env["client"]
+    up = c.post("/api/uploads", data={"file": (io.BytesIO(PNG2), "y.png")}, content_type="multipart/form-data").get_json()
+    remote = str(tmp_path / "remote" / "tempu-backup")
+    conn = dbmod.connect(db, journal=False)
+    B.save_config(conn, {"enabled": True, "remote": remote, "categories": {"files": False}})
+    conn.close()
+    assert B.run(db)["ok"] == 1
+    conn = dbmod.connect(db, journal=False)
+    assert B.pending(conn, db)[0] is False and B.status(conn, db)["files_waiting"] == 0
+    # files on again, but the file was deleted from disk meanwhile
+    B.save_config(conn, {"categories": {"files": True}})
+    conn.close()
+    shutil.rmtree(os.path.join(env["data"], "blobs"))
+    assert B.run(db)["ok"] == 1
+    conn = dbmod.connect(db, journal=False)
+    assert B.pending(conn, db)[0] is False, B.pending(conn, db)
+    conn.close()
+
+
+@pytest.mark.skipif(not shutil.which("rclone"), reason="rclone not installed")
+def test_content_database_uploaded_only_when_it_changed(env, tmp_path, monkeypatch):
+    db = env["db"]
+    remote = str(tmp_path / "remote" / "tempu-backup")
+    conn = dbmod.connect(db, journal=False)
+    B.save_config(conn, {"enabled": True, "remote": remote, "categories": {"base": True}})
+    conn.close()
+    calls = []
+    real = B._rclone
+    monkeypatch.setattr(B, "_rclone", lambda cfg, *a, **k: (calls.append(a), real(cfg, *a, **k))[1])
+    assert B.run(db, force=True)["ok"] == 1
+    assert any(a[0] == "copyto" and a[-1].endswith("content/base.db") for a in calls)
+    calls.clear()
+    assert B.run(db, force=True)["ok"] == 1
+    assert not any(a[0] == "copyto" and a[-1].endswith("content/base.db") for a in calls), calls
+
+
+@pytest.mark.skipif(not shutil.which("rclone"), reason="rclone not installed")
+def test_pruning_keeps_exactly_what_retention_says(env, tmp_path):
+    import time
+    db = env["db"]
+    remote = str(tmp_path / "remote" / "tempu-backup")
+    conn = dbmod.connect(db, journal=False)
+    B.save_config(conn, {"enabled": True, "remote": remote, "keep_recent": 2, "keep_daily": 0, "keep_monthly": 0})
+    cfg = B.get_config(conn)
+    conn.close()
+    for _ in range(4):
+        assert B.run(db, force=True)["ok"] == 1
+        time.sleep(1.1)                                   # snapshot names have 1-second resolution
+    left = B.list_remote(cfg)
+    assert len(left) == 2
+    files = [f for _, _, fs in os.walk(os.path.join(remote, "snapshots")) for f in fs]
+    assert sorted(f for f in files if f.endswith(".json")) == sorted(n[:-3] + ".json" for n in left)

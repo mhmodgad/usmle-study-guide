@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% set back_href = '/libraries/' ~ library.id %}
+{% block title %}{{ chapter.title }} | TEMP-U{% endblock %}
+{% macro bar(pct, h) -%}
+<div role="progressbar" aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100" class="w-full overflow-hidden rounded-full bg-muted shadow-[inset_0_0_0_1px_var(--border)] {{ h }}"><div class="h-full rounded-full transition-[width] duration-500 ease-out bg-status-info" style="width: {{ pct }}%;"></div></div>
+{%- endmacro %}
+{% block main %}
+<div class="min-h-full"><div class="mx-auto flex w-full max-w-5xl flex-col gap-8">
+  <nav aria-label="Library breadcrumb" class="w-full min-w-0"><ol class="flex min-h-11 min-w-0 items-center text-sm">
+    <li class="flex min-w-0 items-center"><span class="group/crumb inline-flex min-w-0 items-center rounded-lg font-medium text-muted-foreground"><a class="flex min-w-0 items-center rounded-l-lg px-2.5 min-h-9 py-1.5 max-w-32 truncate sm:max-w-40 hover:bg-accent/70 hover:text-foreground" href="/libraries/{{ library.id }}">{{ library.title }}</a></span></li>
+    <li class="flex min-w-0 items-center"><span class="group/crumb inline-flex min-w-0 items-center rounded-lg bg-primary/10 font-semibold text-primary"><span aria-current="page" class="flex min-w-0 items-center rounded-l-lg px-2.5 min-h-9 py-1.5 max-w-56 whitespace-normal break-words leading-snug sm:max-w-96 lg:max-w-xl">{{ chapter.title }}</span></span></li>
+  </ol></nav>
+
+  <header class="ch-head flex items-center gap-4" data-ed-kind="chapter" data-ed-id="{{ chapter.id }}" data-ed-parent="{{ library.id }}">
+    {% set chicon = icon_web(chapter.icon_path) %}
+    <button class="ed-icon relative flex size-16 shrink-0 items-center justify-center rounded-full border bg-muted/40" >
+      {% if chicon %}<img src="{{ chicon }}" alt="" class="size-10 object-contain" onerror="this.remove()">{% endif %}
+      <span class="ed-icon-cam" aria-hidden="true">✎</span>
+    </button>
+    <div class="min-w-0 flex-1">
+      <p class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Chapter</p>
+      <h1 class="ed-title text-3xl font-bold tracking-tight" >{{ chapter.title }}</h1>
+    </div>
+    <button class="ed-del ed-only h-9 items-center rounded-lg border px-3 text-sm text-destructive hover:bg-accent" title="Delete chapter (to trash)">🗑 Delete chapter</button>
+    <button class="edit-toggle" data-edit-toggle data-edit-hint="Click the chapter or a section name to rename it, click an icon to change it, drag ⋮⋮ to reorder sections, ⋯ for more." aria-pressed="false">✎ <span class="etl">Edit</span></button>
+  </header>
+
+  <div class="w-full max-w-2xl"><div class="flex w-full flex-col gap-1.5">
+    <div class="flex items-center justify-between text-xs font-semibold text-muted-foreground">
+      <span class="min-w-0 truncate">{{ sec_done }} of {{ sec_total }} sections studied</span>
+      <span class="shrink-0 tabular-nums">{{ pct }}%</span>
+    </div>
+    {{ bar(pct, 'h-3.5') }}
+  </div></div>
+
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div class="flex items-center gap-2">
+      {% if prev_ch %}<a href="/libraries/{{ library.id }}/chapters/{{ prev_ch.id }}" class="inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm hover:bg-accent" title="Previous chapter">‹ {{ prev_ch.title }}</a>{% endif %}
+      {% if next_ch %}<a href="/libraries/{{ library.id }}/chapters/{{ next_ch.id }}" class="inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm hover:bg-accent" title="Next chapter">{{ next_ch.title }} ›</a>{% endif %}
+    </div>
+    <div class="flex items-center gap-2">
+      <div class="view-switch" role="group" aria-label="View">
+        <button type="button" data-view="cards" title="Cards view">Cards</button><button type="button" data-view="list" title="Compact list: name, progress and Continue on one line">List</button>
+      </div>
+      <input id="ch-filter" type="search" placeholder="Filter sections / topics…" class="h-9 w-56 rounded-lg border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+      <button id="ch-add-section" data-chapter="{{ chapter.id }}" class="ed-only h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground">+ New section</button>
+      <a href="/libraries/{{ library.id }}/organize#chapter-{{ chapter.id }}" class="inline-flex h-9 items-center rounded-lg border px-3 text-sm hover:bg-accent">Organize</a>
+    </div>
+  </div>
+
+  <div id="ch-grid" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" data-chapter="{{ chapter.id }}">
+    {% for s in sections %}
+    <article class="ch-sec group relative flex self-stretch flex-col overflow-hidden rounded-2xl bg-card text-card-foreground outline-none card-surface" data-title="{{ s.row.title|lower }}" data-topics="{{ s.topics|map(attribute='title')|join('|')|lower }}"
+             data-ed-kind="section" data-ed-id="{{ s.row.id }}" data-ed-parent="{{ chapter.id }}">
+      <div class="ed-tools">
+        <span class="ed-grip" draggable="true" title="Drag to reorder">⋮⋮</span>
+        <button class="ed-rename ed-tool-btn" title="Rename section">✎</button>
+        <button class="ed-menu-btn" title="More: icon, move, add, delete">⋯</button>
+      </div>
+      <button class="bm-btn absolute right-3 top-3 z-10 {% if s.bookmarked %}is-on{% endif %}" data-section="{{ s.row.id }}" title="Bookmark section">★</button>
+      <a class="flex flex-col items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 px-6 pb-6 pt-10" href="/libraries/{{ library.id }}/chapters/{{ chapter.id }}/sections/{{ s.row.id }}">
+        <div class="ed-icon relative flex shrink-0 items-center justify-center rounded-full border border-border/60 bg-muted/40 transition-transform duration-300 group-hover:scale-105 size-28 p-3" >
+          <span class="ed-icon-cam" aria-hidden="true">✎</span>
+          {% if s.icon %}<img alt="{{ s.row.title }} icon" loading="lazy" width="64" height="64" class="object-contain size-16" src="{{ s.icon }}" style="color: transparent;" onerror="this.style.display='none'">{% endif %}
+        </div>
+        <h3 class="ed-title line-clamp-2 text-center font-bold tracking-tight text-foreground mt-5 text-xl" >{{ s.row.title }}</h3>
+      </a>
+      <div class="flex flex-1 flex-col px-5 pb-5">
+        <div class="flex w-full flex-col gap-1.5 mb-4">
+          <div class="flex items-center justify-between text-xs font-semibold text-muted-foreground">
+            <span class="min-w-0 truncate">{% if s.pct >= 100 %}Studied{% elif s.pct > 0 %}In progress{% else %}Not started{% endif %}</span>
+            <span class="shrink-0 tabular-nums">{{ s.pct }}%</span>
+          </div>
+          {{ bar(s.pct, 'h-2.5') }}
+        </div>
+        <div class="mt-auto">
+          <div class="flex items-center gap-2 mb-2 w-full">
+            {% if s.total %}
+            <a href="/libraries/{{ library.id }}/chapters/{{ chapter.id }}/sections/{{ s.row.id }}" class="inline-flex flex-1 items-center justify-center h-10 bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs rounded-lg px-4 py-2 text-sm font-medium transition-colors">{% if s.pct >= 100 %}Review{% elif s.pct > 0 %}Continue{% else %}Study{% endif %}</a>
+            {% elif s.row.total_topics %}
+            <span class="inline-flex flex-1 items-center justify-center h-10 rounded-lg border border-dashed px-4 py-2 text-sm text-muted-foreground" title="This section's {{ s.row.total_topics }} topics weren't captured into your local content, so there is nothing to read yet.">Not downloaded</span>
+            {% else %}
+            <a href="/libraries/{{ library.id }}/chapters/{{ chapter.id }}/sections/{{ s.row.id }}" class="inline-flex flex-1 items-center justify-center h-10 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent">Open and add topics</a>
+            {% endif %}
+            {% if s.cards %}<a href="/flashcards/review?scope=section&id={{ s.row.id }}&title={{ s.row.title|urlencode }}" class="inline-flex items-center justify-center h-10 rounded-lg border px-3 text-sm font-medium hover:bg-accent" title="Review {{ s.cards }} cards">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"></path></svg></a>{% endif %}
+          </div>
+          <div class="text-xs text-muted-foreground text-center">{% if s.total %}{{ s.done }}/{{ s.total }} topics{% if s.minutes %} · ~{{ s.minutes }} min read{% endif %}{% if s.last_opened %} · opened {{ s.last_opened|monthday }}{% endif %}{% elif s.row.total_topics %}{{ s.row.total_topics }} topics on the live site, not in your local copy{% else %}Empty section{% endif %}</div>
+          {% if s.topics %}
+          <details class="ch-topics mt-3 rounded-lg border">
+            <summary class="cursor-pointer select-none px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">Topics ({{ s.topics|length }})</summary>
+            <ol class="max-h-56 overflow-auto px-2 pb-2">
+              {% for t in s.topics %}
+              <li><a href="/libraries/{{ library.id }}/chapters/{{ chapter.id }}/sections/{{ s.row.id }}#topic-{{ t.id }}" class="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent/60"><span class="{% if t.completed %}text-status-success{% else %}text-muted-foreground/50{% endif %}">{% if t.completed %}✓{% else %}○{% endif %}</span><span class="min-w-0 flex-1 truncate">{{ t.title }}</span></a></li>
+              {% endfor %}
+            </ol>
+          </details>
+          {% endif %}
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</div></div>
+{% endblock %}
+{% block scripts %}<script>
+(function () {   // new layout: remember Cards / List view for chapter pages
+  const grid = document.getElementById('ch-grid'), btns = document.querySelectorAll('.view-switch [data-view]');
+  function set(v) { grid.classList.toggle('list-view', v === 'list'); btns.forEach(b => b.setAttribute('aria-pressed', b.dataset.view === v));
+    try { localStorage.setItem('tempu-chapter-view', v); } catch (e) {} }
+  btns.forEach(b => b.addEventListener('click', () => set(b.dataset.view)));
+  let v = 'cards'; try { v = localStorage.getItem('tempu-chapter-view') || 'cards'; } catch (e) {}
+  set(v);
+})();
+</script><script src="{{ url_for('static', filename='js/edit-mode.js') }}"></script>
+<script src="{{ url_for('static', filename='js/struct-inline.js') }}"></script>
+<script>
+(function () {
+  const f = document.getElementById('ch-filter');
+  const cards = [...document.querySelectorAll('.ch-sec')];
+  f && f.addEventListener('input', () => {
+    const q = f.value.trim().toLowerCase();
+    cards.forEach(c => {
+      const tHit = q && c.dataset.topics.includes(q);
+      c.classList.toggle('hidden', !!q && !c.dataset.title.includes(q) && !tHit);
+      const d = c.querySelector('.ch-topics'); if (d) d.open = !!tHit;
+    });
+  });
+  const add = document.getElementById('ch-add-section');
+  add && add.addEventListener('click', async () => {
+    const title = prompt('Name of the new section:'); if (!title) return;
+    const r = await fetch('/api/structure/section', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({parent_id: add.dataset.chapter, title})}).then(r => r.json());
+    if (r.url) location.href = r.url; else location.reload();
+  });
+  document.addEventListener('click', async e => {
+    const b = e.target.closest('.bm-btn'); if (!b) return;
+    e.preventDefault();
+    const on = !b.classList.contains('is-on'); b.classList.toggle('is-on', on);
+    await fetch(`/api/sections/${b.dataset.section}/state`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({bookmarked: on})});
+  });
+})();
+</script>{% endblock %}

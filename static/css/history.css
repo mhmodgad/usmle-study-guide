@@ -72,3 +72,10 @@
 .th-banner { border-radius: .6rem; padding: .6rem .8rem; font-size: .85rem; border: 1px solid var(--border); }
 .th-banner.err { border-color: color-mix(in oklab, var(--destructive) 50%, transparent); color: var(--destructive); }
 .th-notice { margin: .25rem 0 .5rem; font-size: .8rem; border: 1px dashed var(--border); border-radius: .5rem; padding: .4rem .7rem; color: var(--muted-foreground); }
+
+/* narrow screens: let rows wrap instead of overflowing */
+@media (max-width: 640px) {
+  .th-card form.flex, .th-card .flex.items-center.gap-2 { flex-wrap: wrap; }
+  .th-card form.flex input { min-width: 0; flex: 1 1 12rem; }
+}
+.th-card kbd, .th-card + kbd, section kbd, h2 + p kbd { font-family: var(--th-font, inherit); font-size: .85em; }

@@ -271,7 +271,12 @@
 
   async function finish(reload = true) {
     if (!ed) return;
-    await save(true);
+    // never close (and reload) with unsaved text: wait for saves in flight, save the rest
+    if (!(await save())) {
+      status("Couldn't save — your changes are still here. Check the app is running, then press Done again.", 'error');
+      return;
+    }
+    if (!ed) return;
     const {art} = ed;
     teardown();
     if (reload) {
@@ -296,33 +301,56 @@
     const s = ed.tb.querySelector('.ce-status');
     s.textContent = t; s.dataset.state = cls || '';
   }
+  // every edit bumps ed.rev; a save only marks the editor clean if nothing
+  // changed while it was on its way (typing during a save used to be dropped)
+  function markDirty() { ed.dirty = true; ed.rev = (ed.rev || 0) + 1; }
   function changed(structural) {
     if (!ed) return;
-    ed.dirty = true;
+    markDirty();
     status('Unsaved changes…', 'dirty');
     snapshot(structural);
     clearTimeout(ed.timer);
     ed.timer = setTimeout(() => save(), 1500);
     if (structural) { normalizeColumns(ed.root); renumber(ed.root); positionImgTools(); }
   }
-  async function save(force) {
-    if (!ed || (!ed.dirty && !force) || ed.saving) return;
-    if (!ed.dirty) return;
-    ed.saving = true;
-    clearTimeout(ed.timer);
-    renumber(ed.root);
-    const payload = {html: cleanForSave(ed.root), title: ed.title.textContent.trim(), checkpoint: !ed.checkpointed, session: ed.session};
+  // Resolves true when everything typed so far is saved, false when the server
+  // couldn't be reached (then it retries on its own every few seconds).
+  async function save() {
+    const me = ed;
+    if (!me) return true;
+    if (me.saving) { await me.saving; return ed === me ? save() : true; }   // one save at a time
+    if (!me.dirty) return true;
+    clearTimeout(me.timer);
+    renumber(me.root);
+    const rev = me.rev || 0;
+    const payload = {html: cleanForSave(me.root), title: me.title.textContent.trim(), checkpoint: !me.checkpointed, session: me.session};
     status('Saving…', 'saving');
-    try {
-      const r = await fetch(`/api/topics/${ed.tid}/content`, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
-      if (!r.ok) throw new Error(r.status);
-      ed.checkpointed = true; ed.dirty = false;
-      status('Saved ✓', 'saved');
-    } catch (e) {
-      status('Save failed — retrying', 'error');
-      setTimeout(() => { if (ed) { ed.saving = false; save(); } }, 3000);
-      return;
-    } finally { if (ed) ed.saving = false; }
+    me.saving = (async () => {
+      try {
+        const r = await fetch(`/api/topics/${me.tid}/content`, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+        if (!r.ok) throw new Error(r.status);
+        me.checkpointed = true;
+        if ((me.rev || 0) === rev) { me.dirty = false; if (ed === me) status('Saved ✓', 'saved'); }
+        return true;
+      } catch (e) {
+        if (ed === me) status('Save failed — retrying. Your changes are kept here.', 'error');
+        clearTimeout(me.retry);
+        me.retry = setTimeout(() => { if (ed === me) save(); }, 3000);
+        return false;
+      } finally { me.saving = null; }
+    })();
+    const ok = await me.saving;
+    if (ok && me.dirty && ed === me) return save();     // edits made while it was saving
+    return ok;
+  }
+  // last chance when the page is closed: a "keepalive" request outlives the page
+  function saveOnUnload() {
+    if (!ed || !ed.dirty) return;
+    const body = JSON.stringify({html: cleanForSave(ed.root), title: ed.title.textContent.trim(),
+                                 checkpoint: !ed.checkpointed, session: ed.session});
+    if (body.length < 60000) {
+      try { fetch(`/api/topics/${ed.tid}/content`, {method: 'PUT', keepalive: true, headers: {'Content-Type': 'application/json'}, body}); } catch (e) {}
+    }
   }
 
   // undo / redo snapshots of the whole document
@@ -343,12 +371,12 @@
     if (ed.undo[ed.undo.length - 1] !== cur) ed.undo.push(cur);
     ed.redo.push(ed.undo.pop());
     ed.root.innerHTML = ed.undo[ed.undo.length - 1];
-    ed.dirty = true; clearTimeout(ed.timer); ed.timer = setTimeout(() => save(), 1500); status('Unsaved changes…', 'dirty');
+    markDirty(); clearTimeout(ed.timer); ed.timer = setTimeout(() => save(), 1500); status('Unsaved changes…', 'dirty');
   }
   function redo() {
     if (!ed || !ed.redo.length) return;
     const html = ed.redo.pop(); ed.undo.push(html); ed.root.innerHTML = html;
-    ed.dirty = true; clearTimeout(ed.timer); ed.timer = setTimeout(() => save(), 1500); status('Unsaved changes…', 'dirty');
+    markDirty(); clearTimeout(ed.timer); ed.timer = setTimeout(() => save(), 1500); status('Unsaved changes…', 'dirty');
   }
 
   // ------------------------------------------------------------ block operations
@@ -1459,7 +1487,7 @@
     // dropping image files anywhere on the topic while editing
     on(ed.art, 'dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
 
-    on(window, 'beforeunload', e => { if (ed && ed.dirty) { save(true); e.preventDefault(); e.returnValue = ''; } });
+    on(window, 'beforeunload', e => { if (ed && ed.dirty) { saveOnUnload(); e.preventDefault(); e.returnValue = ''; } });
     on(document, 'click', e => {
       if (!e.target.closest('.ce-pop-wrap')) tb.querySelectorAll('.ce-pop.open').forEach(p => p.classList.remove('open'));
     });
@@ -1474,7 +1502,9 @@
     if (!ed) return;
     if (!confirm('Go back to the original content of this topic?\n(You can undo this, and your edited version stays in Version history.)')) return;
     const {tid} = ed;
-    ed.dirty = false;
+    if (ed.saving) await ed.saving;          // a save landing after this would undo it
+    if (!ed) return;
+    ed.dirty = false; clearTimeout(ed.timer); clearTimeout(ed.retry);
     teardown();
     await fetch(`/api/topics/${tid}/content`, {method: 'DELETE'});
     location.hash = 'topic-' + tid; location.reload();
@@ -1482,7 +1512,7 @@
   async function showHistory() {
     if (!ed) return;
     const {tid} = ed;
-    if (ed.dirty) await save();
+    await save();
     if (window.TempuHistory) { window.TempuHistory.openTopic(tid); return; }
     toast('Version history is not available.');
   }

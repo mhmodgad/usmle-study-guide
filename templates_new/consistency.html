@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Consistency | TEMP-U{% endblock %}
+{% block main %}
+<div class="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-semibold tracking-tight">Consistency</h1>
+    <button id="log-activity" class="inline-flex h-9 items-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90">Log study activity</button>
+  </div>
+
+  {% set lvlbg = ['var(--muted)',
+                  'color-mix(in oklab, var(--primary) 30%, var(--muted))',
+                  'color-mix(in oklab, var(--primary) 62%, var(--muted))',
+                  'var(--primary)'] %}
+
+  <div class="mt-6 grid gap-4 sm:grid-cols-4">
+    <div class="rounded-2xl border bg-card p-5 shadow-sm"><p class="text-3xl font-bold">{{ cons.current_streak }}</p><p class="mt-1 text-xs text-muted-foreground">Current streak <span class="text-muted-foreground/70">(days)</span></p></div>
+    <div class="rounded-2xl border bg-card p-5 shadow-sm"><p class="text-3xl font-bold">{{ cons.longest_streak }}</p><p class="mt-1 text-xs text-muted-foreground">Longest streak <span class="text-muted-foreground/70">(days)</span></p></div>
+    <div class="rounded-2xl border bg-card p-5 shadow-sm"><p class="text-3xl font-bold">{{ cons.active_days }}</p><p class="mt-1 text-xs text-muted-foreground">Days studied</p></div>
+    <div class="rounded-2xl border bg-card p-5 shadow-sm"><p class="text-3xl font-bold">{{ cons.days_at_goal }}</p><p class="mt-1 text-xs text-muted-foreground">Days at goal</p></div>
+  </div>
+
+  <!-- this week -->
+  <div class="mt-6 rounded-2xl border bg-card p-6 shadow-sm">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold">This week</h2>
+      <span class="text-sm text-muted-foreground">Today: {{ cons.today_units }} / {{ cons.goal_units }} units</span>
+    </div>
+    <div class="mt-4 flex items-end justify-between gap-2">
+      {% for d in cons.week %}
+      <div class="flex flex-1 flex-col items-center gap-1.5">
+        <div class="flex h-14 w-full items-end overflow-hidden rounded-md bg-muted/50">
+          <div class="w-full rounded-md" style="height: {{ [100 * d.units / cons.goal_units, 100]|min if cons.goal_units else 0 }}%; background: {{ lvlbg[3] if d.level>=3 else lvlbg[2] if d.units>0 else 'transparent' }}"></div>
+        </div>
+        <span class="text-xs {% if d.today %}font-bold text-primary{% else %}text-muted-foreground{% endif %}">{{ d.label }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="mt-4 h-2 w-full overflow-hidden rounded-full bg-muted"><div class="h-full rounded-full bg-primary" style="width: {{ (100 * cons.today_units / cons.goal_units)|round|int if cons.goal_units else 0 }}%"></div></div>
+    <div class="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+      <span>Daily goal: {{ cons.goal_units }} units</span>
+      <a href="/settings/preferences" class="font-medium text-primary hover:underline">Change goal</a>
+    </div>
+  </div>
+
+  <!-- heatmap -->
+  <div class="mt-6 rounded-2xl border bg-card p-6 shadow-sm">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold">Study activity</h2>
+      <span class="text-xs text-muted-foreground">Last {{ cons.heatmap|length }} weeks</span>
+    </div>
+    <div class="mt-4 overflow-x-auto">
+      <div class="inline-flex flex-col">
+        <div class="mb-1 flex gap-1">
+          {% for m in cons.months %}<span class="w-3 shrink-0 overflow-visible whitespace-nowrap text-[10px] text-muted-foreground">{{ m }}</span>{% endfor %}
+        </div>
+        <div class="flex gap-1">
+          {% for col in cons.heatmap %}
+          <div class="flex flex-col gap-1">
+            {% for cell in col %}
+            <span title="{{ cell.date }}: {{ cell.units }} units" {% if cell.level >= 0 %}data-day="{{ cell.date }}" role="button"{% endif %} class="hm-cell size-3 rounded-[2px]" style="background: {{ 'transparent' if cell.level < 0 else lvlbg[cell.level] }};{% if cell.level < 0 %}box-shadow: inset 0 0 0 1px var(--border);{% endif %}"></span>
+            {% endfor %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="mt-3 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+      <span>Less</span>
+      {% for b in lvlbg %}<span class="size-3 rounded-[2px]" style="background: {{ b }}"></span>{% endfor %}
+      <span>More</span>
+    </div>
+  </div>
+
+  <div id="day-detail" class="day-detail hidden" aria-live="polite"></div>
+
+  <!-- all-time -->
+  <div class="mt-6 grid gap-4 sm:grid-cols-3">
+    <div class="rounded-2xl border bg-card p-5 shadow-sm"><p class="text-2xl font-bold">{{ cons.total_units }}</p><p class="mt-1 text-xs text-muted-foreground">Total TEMPU units</p></div>
+    <div class="rounded-2xl border bg-card p-5 shadow-sm"><p class="text-2xl font-bold">{{ cons.total_hours }}h {{ cons.total_mins }}m</p><p class="mt-1 text-xs text-muted-foreground">Total time studied</p></div>
+    <div class="rounded-2xl border bg-card p-5 shadow-sm"><p class="text-2xl font-bold">{{ cons.avg_units }}</p><p class="mt-1 text-xs text-muted-foreground">Avg units on active days</p></div>
+  </div>
+</div>
+
+<div id="log-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/40 p-4">
+  <div class="w-full max-w-md rounded-2xl border bg-card p-6 shadow-2xl">
+    <h3 class="text-lg font-semibold">Log study activity</h3>
+    <div class="mt-4 space-y-3 text-sm">
+      <label class="block">Day
+        <select id="log-day" class="mt-1 h-9 w-full rounded-lg border bg-background px-3"><option value="today">Today</option><option value="yesterday">Yesterday</option></select></label>
+      <label class="block">English video minutes <input id="log-eng" type="number" min="0" value="0" class="mt-1 h-9 w-full rounded-lg border bg-background px-3"></label>
+      <label class="block">Arabic video minutes <input id="log-ara" type="number" min="0" value="0" class="mt-1 h-9 w-full rounded-lg border bg-background px-3"></label>
+      <label class="block">Questions answered <input id="log-q" type="number" min="0" value="0" class="mt-1 h-9 w-full rounded-lg border bg-background px-3"></label>
+    </div>
+    <div class="mt-6 flex justify-end gap-2">
+      <button id="log-cancel" class="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent">Cancel</button>
+      <button id="log-save" class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Log activity</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/new/day-detail.js"></script><script>
+const m=document.getElementById('log-modal');
+document.getElementById('log-activity').onclick=()=>{m.classList.remove('hidden');m.classList.add('flex');};
+document.getElementById('log-cancel').onclick=()=>{m.classList.add('hidden');m.classList.remove('flex');};
+document.getElementById('log-save').onclick=async()=>{
+  const day=document.getElementById('log-day').value;
+  let d=new Date(); if(day==='yesterday')d.setDate(d.getDate()-1);
+  const iso=d.toISOString().slice(0,10);
+  await fetch('/api/consistency/log',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({day:iso,englishMinutes:+document.getElementById('log-eng').value,
+      arabicMinutes:+document.getElementById('log-ara').value,
+      questionsAnswered:+document.getElementById('log-q').value})});
+  location.reload();
+};
+</script>{% endblock %}

@@ -361,6 +361,42 @@ CREATE TABLE IF NOT EXISTS main.backup_log (
     error       TEXT
 );
 
+-- ------------------------------------------------ flashcards you make while reading
+CREATE TABLE IF NOT EXISTS main.my_cards (
+    id          TEXT PRIMARY KEY,      -- 'my-<uuid>' (never clashes with library card ids)
+    topic_id    TEXT,
+    front       TEXT NOT NULL,         -- question / sentence with the blank
+    back        TEXT NOT NULL,         -- answer
+    quote       TEXT,                  -- the passage it was made from
+    source      TEXT,                  -- highlight | selection | manual
+    created_at  TEXT,
+    updated_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS main.idx_my_cards_topic ON my_cards(topic_id);
+
+-- your collections live here (user.db), not in base.db, which the loader rebuilds
+CREATE TABLE IF NOT EXISTS main.my_collections (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    description TEXT,
+    exam_scope  TEXT,
+    share_state TEXT,
+    created_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS main.my_collection_items (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id TEXT NOT NULL REFERENCES my_collections(id) ON DELETE CASCADE,
+    item_type     TEXT NOT NULL,         -- 'topic' | 'section'
+    topic_id      TEXT,
+    section_id    TEXT,
+    chapter_id    TEXT,
+    entry_id      TEXT,
+    sort_order    INTEGER DEFAULT 0,
+    added_at      TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS main.idx_my_colitems_unique
+    ON my_collection_items(collection_id, item_type, COALESCE(topic_id,''), COALESCE(section_id,''));
+
 CREATE TABLE IF NOT EXISTS main.user_meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -370,7 +406,8 @@ CREATE TABLE IF NOT EXISTS main.user_meta (
 USER_TABLES = ("progress", "highlights", "inline_notes", "topic_notes", "card_reviews",
                "decks", "deck_cards", "study_log", "settings", "topic_edits",
                "topic_edit_history", "struct_overrides", "section_state", "changesets",
-               "revisions", "doc_texts", "checkpoints", "blobs", "backup_log", "user_meta")
+               "revisions", "doc_texts", "checkpoints", "blobs", "backup_log", "user_meta", "my_cards",
+               "my_collections", "my_collection_items")
 
 
 def connect(db_path=None, attach_base=True, journal=True):
@@ -425,7 +462,62 @@ def ensure_user_tables(conn):
             continue
         if cols and col not in cols:
             conn.execute(f"ALTER TABLE {schema}.{table} ADD COLUMN {col} {decl}")
+    install_change_counter(conn)
+    adopt_personal_collections(conn)
     conn.commit()
+
+
+def adopt_personal_collections(conn):
+    """Once: copy the personal collections that sit in base.db (the captured
+    "My HY", and any made before this fix) into user.db. base.db is rebuilt
+    from the content folder, which used to wipe collections you made."""
+    if conn.execute("SELECT 1 FROM main.user_meta WHERE key='collections_adopted'").fetchone():
+        return 0
+    try:
+        if not conn.execute("SELECT 1 FROM base.collections LIMIT 1").fetchone():
+            return 0                           # library not loaded yet: try again after it is
+        rows = conn.execute("SELECT * FROM base.collections WHERE kind='personal'").fetchall()
+    except sqlite3.OperationalError:
+        return 0                               # base.db not built yet: try next time
+    n = 0
+    for c in rows:
+        conn.execute("INSERT OR IGNORE INTO main.my_collections(id,title,description,exam_scope,share_state,created_at) "
+                     "VALUES(?,?,?,?,?,?)", (c["id"], c["title"] or "Collection", c["description"],
+                                              c["exam_scope"], c["share_state"], c["created_at"]))
+        for it in conn.execute("SELECT * FROM base.collection_items WHERE collection_id=? ORDER BY sort_order",
+                               (c["id"],)).fetchall():
+            conn.execute("INSERT OR IGNORE INTO main.my_collection_items(collection_id,item_type,topic_id,section_id,"
+                         "chapter_id,entry_id,sort_order) VALUES(?,?,?,?,?,?,?)",
+                         (c["id"], it["item_type"], it["topic_id"], it["section_id"], it["chapter_id"],
+                          it["entry_id"], it["sort_order"]))
+        n += 1
+    conn.execute("INSERT OR REPLACE INTO main.user_meta(key,value) VALUES('collections_adopted','1')")
+    return n
+
+# Tables whose changes never count as "your data changed" (the backup's own bookkeeping).
+NOT_COUNTED = ("backup_log", "user_meta")
+
+
+def install_change_counter(conn):
+    """Persistent triggers that bump ``user_meta.change_seq`` (and stamp
+    ``change_at``, unix seconds) whenever your data changes. The backup compares
+    this counter with the one it recorded at its last snapshot, so its own
+    writes (log rows, upload stamps) never make it look like there is
+    something new to back up."""
+    conn.execute("INSERT OR IGNORE INTO main.user_meta(key,value) VALUES('change_seq','1')")
+    conn.execute("INSERT OR IGNORE INTO main.user_meta(key,value) VALUES('change_at','0')")
+    bump = ("UPDATE user_meta SET value = CASE key WHEN 'change_seq' THEN CAST(CAST(value AS INTEGER)+1 AS TEXT) "
+            "ELSE CAST(strftime('%s','now') AS TEXT) END WHERE key IN ('change_seq','change_at');")
+    have = {r[0] for r in conn.execute("SELECT name FROM main.sqlite_master WHERE type='trigger' AND name LIKE 'chg\\_%' ESCAPE '\\'")}
+    for t in USER_TABLES:
+        if t in NOT_COUNTED:
+            continue
+        for ev in ("INSERT", "UPDATE", "DELETE"):
+            if t == "blobs" and ev == "UPDATE":
+                continue                     # only the upload stamp changes on update
+            name = f"chg_{t}_{ev[0].lower()}"
+            if name not in have:
+                conn.execute(f'CREATE TRIGGER IF NOT EXISTS main."{name}" AFTER {ev} ON main."{t}" BEGIN {bump} END')
 
 
 def init_search(conn):

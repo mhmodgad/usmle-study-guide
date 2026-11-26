@@ -60,6 +60,47 @@ def _upsert(conn, kind, item_id, **f):
 
 
 # ------------------------------------------------------------------ operations
+PARENT = {"chapter": "library", "section": "chapter", "topic": "section"}
+
+
+def parent_problem(conn, kind, parent_id):
+    """None if parent_id is a live parent for this kind, else a message."""
+    pk = PARENT.get(kind)
+    if not pk:
+        return "This can't be moved."
+    if _row(conn, pk, parent_id):
+        return None
+    o = _ovr(conn, pk, parent_id)
+    if o and o["deleted"] == 1:
+        return "'%s' is in the trash. Restore it first." % (o["title"] or "That %s" % pk)
+    # went to the trash together with something bigger (a section inside a deleted chapter)
+    for t in conn.execute("SELECT kind, id, title, payload FROM struct_overrides WHERE deleted=1 AND payload LIKE ?",
+                          ('%' + json.dumps(parent_id) + '%',)).fetchall():
+        p = json.loads(t["payload"] or "{}")
+        inner = next((r for rows in p.values() for r in rows if r.get("id") == parent_id), None)
+        if inner:
+            outer = t["title"] or next((r.get("title") for r in p.get(_table(t["kind"])[0], []) if r.get("id") == t["id"]), None)
+            return "'%s' is in the trash inside %s '%s'. Restore '%s' first." % (
+                inner.get("title") or pk, t["kind"], outer or "", outer or "it")
+    return "That %s doesn't exist." % pk
+
+
+def restore_problem(conn, kind, item_id):
+    """Why restoring from the trash can't work right now (its parent is gone), or None."""
+    o = _ovr(conn, kind, item_id)
+    if not o or o["deleted"] != 1:
+        return None
+    t, pcol = _table(kind)
+    rows = json.loads(o["payload"] or "{}").get(t) or []
+    top = next((r for r in rows if r.get("id") == item_id), None)
+    if not top or not pcol:
+        return None
+    prob = parent_problem(conn, kind, top.get(pcol))
+    if prob:
+        return "It was inside a %s that is not there now. %s" % (PARENT[kind], prob)
+    return None
+
+
 def create(conn, kind, parent_id, title, after_id=None, icon_path=None):
     """Make a new chapter/section/topic under parent_id (after after_id, else at the end)."""
     t, pcol = _table(kind)
@@ -132,9 +173,14 @@ def move(conn, kind, item_id, parent_id, ordered_ids=None, index=None):
         sibs.insert(index, item_id)
         ordered_ids = sibs
     else:
-        ordered_ids = [i for i in ordered_ids if _row(conn, kind, i)]
+        # only the destination's own children (plus the item being moved): an id
+        # from elsewhere in the list used to be pulled silently into this parent
+        mine = {r["id"] for r in conn.execute(f"SELECT id FROM {t} WHERE {pcol}=?", (parent_id,))}
+        mine.add(item_id)
+        ordered_ids = [i for i in dict.fromkeys(ordered_ids) if i in mine]
         if item_id not in ordered_ids:
             ordered_ids.append(item_id)
+        ordered_ids += [i for i in mine if i not in ordered_ids]     # children the list forgot keep a place
     _write_order(conn, kind, parent_id, ordered_ids)
     if old != parent_id:   # close the gap in the old parent
         rest = [r["id"] for r in conn.execute(

@@ -11,7 +11,7 @@
   <section class="th-card flex flex-col gap-3">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h3 class="font-semibold">Checkpoints</h3>
-      <form id="cp-form" class="flex gap-2">
+      <form id="cp-form" class="flex flex-wrap gap-2">
         <input id="cp-name" class="th-input" placeholder="e.g. Before reorganising Cardio" maxlength="80">
         <button class="th-btn primary" type="submit">Save checkpoint</button>
       </form>
@@ -23,8 +23,8 @@
   <section class="flex flex-col gap-2">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h3 class="font-semibold">Activity</h3>
-      <div class="flex items-center gap-2">
-        <select id="act-kind" class="th-input">
+      <div class="flex flex-wrap items-center gap-2">
+        <select id="act-kind" class="th-input" style="max-width:100%">
           <option value="">All changes</option>
           <option value="structure">Structure (add, move, rename, delete)</option>
           <option value="edit">Topic text</option>

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ page_title }} | TEMP-U{% endblock %}
+{% set groups = [('Profile', [('account','Account','/settings/account'), ('personal','Personal','/settings/personal'), ('password','Password','/settings/password')]),
+                 ('Study', [('preferences','Preferences','/settings/preferences'), ('library','Reader','/settings/library')] + ([('notifications','Notifications','/settings/notifications')] if online_features else [])),
+                 ('Your data', [('history','History & undo','/settings/history'), ('backup','Backup','/settings/backup')])] %}
+{% block main %}
+<div class="mx-auto flex w-full max-w-3xl flex-col gap-6">
+  <div>
+    <h1 class="text-2xl font-bold tracking-tight">Settings</h1>
+    <p class="mt-1 text-sm text-muted-foreground">Manage your account, personal details, and study preferences.</p>
+  </div>
+  <nav class="settings-groups flex flex-wrap items-end gap-x-6 gap-y-2 border-b" aria-label="Settings sections">
+    {% for gname, tabs in groups %}
+    <div class="flex flex-col gap-1">
+      <span class="px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{{ gname }}</span>
+      <div class="flex flex-wrap gap-1">
+        {% for key, label, href in tabs %}
+        <a href="{{ href }}" class="rounded-t-lg border-b-2 px-3 py-2 text-sm font-medium {% if key==settings_tab %}border-primary text-foreground{% else %}border-transparent text-muted-foreground hover:text-foreground{% endif %}">{{ label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </nav>
+  <div>{% block settings_body %}{% endblock %}</div>
+</div>
+{% endblock %}

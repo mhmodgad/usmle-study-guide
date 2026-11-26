@@ -622,6 +622,24 @@ def reset_content(conn):
     conn.commit()
 
 
+def _should_seed(conn, wipe_user):
+    """Copy the captured app's user data (progress, highlights, notes, pins, the HY
+    deck and its review state) ONCE. Doing it on every rebuild brought back
+    things you had deleted, re-pinned chapters you unpinned and reset the
+    review progress of the HY cards. ``--wipe-user`` asks for a fresh copy."""
+    if wipe_user:
+        return True
+    if conn.execute("SELECT 1 FROM user_meta WHERE key='seeded_from_capture'").fetchone():
+        return False
+    used = any(conn.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone()
+               for t in ("progress", "highlights", "inline_notes", "topic_notes", "decks", "card_reviews"))
+    if used:        # built before this flag existed: already seeded, and since used
+        conn.execute("INSERT OR REPLACE INTO user_meta(key,value) VALUES('seeded_from_capture',?)", (_now(),))
+        conn.commit()
+        return False
+    return True
+
+
 def build(content=DEFAULT_CONTENT, db_path=None, include_step1=False,
           wipe_user=False, reset=True, seed=True):
     """Rebuild base.db from the content folder, then re-apply your structure changes.
@@ -645,15 +663,19 @@ def build(content=DEFAULT_CONTENT, db_path=None, include_step1=False,
     print("Loading collections…")
     nitems = load_collections(conn, content)
     print(f"  collection items={nitems}")
-    if seed:
-        print("Seeding user state…")
+    dbmod.ensure_user_tables(conn)
+    if seed and _should_seed(conn, wipe_user):
+        print("Copying your progress, highlights, notes and decks from the captured app (first build only)…")
         seed_user_state(conn, content, wipe=wipe_user)
         seed_study_log(conn, content)
         seed_settings(conn)
         npins = seed_pins(conn)
         ndeck = seed_decks(conn)
+        conn.execute("INSERT OR REPLACE INTO user_meta(key,value) VALUES('seeded_from_capture',?)", (_now(),))
+        conn.commit()
         print(f"  pins={npins}  deck cards matched={ndeck}")
-    dbmod.ensure_user_tables(conn)
+    elif seed:
+        print("Your own data is kept as it is (captured data was copied on the first build).")
     nrep = structmod.replay(conn)
     if nrep:
         print(f"  re-applied {nrep} of your structure changes (chapters/sections/topics)")

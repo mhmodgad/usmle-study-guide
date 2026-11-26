@@ -8,18 +8,28 @@ and iframes that aren't YouTube embeds.
 import html as H
 from html.parser import HTMLParser
 
-DROP_WITH_CONTENT = {"script", "style", "object", "embed", "noscript", "template"}
+DROP_WITH_CONTENT = {"script", "style", "object", "embed", "noscript", "template",
+                     # SVG animation can set href="javascript:..." at run time
+                     "animate", "set", "animatemotion", "animatetransform", "handler", "listener"}
+# page-level tags that change how the WHOLE page behaves; dropped, content (if any) kept
+DROP_TAG_ONLY = {"base", "meta", "link", "form", "frameset", "frame"}
 VOID = {"area", "base", "br", "col", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 URL_ATTRS = {"href", "src", "data-url", "xlink:href", "action", "formaction", "poster"}
 IFRAME_OK = ("https://www.youtube-nocookie.com/", "https://www.youtube.com/", "https://youtube.com/",
              "https://player.vimeo.com/")
 
 
+SAFE_DATA = ("data:image/png", "data:image/jpeg", "data:image/jpg", "data:image/gif", "data:image/webp",
+             "data:image/avif", "data:image/bmp")
+
+
 def _safe_url(v):
     s = (v or "").strip().replace("\x00", "")
     low = "".join(s.split()).lower()
-    if low.startswith(("javascript:", "vbscript:", "data:text/html")):
+    if low.startswith(("javascript:", "vbscript:")):
         return None
+    if low.startswith("data:") and not low.startswith(SAFE_DATA):
+        return None              # only plain images may be inlined as data: URLs
     return s
 
 
@@ -36,7 +46,7 @@ class _San(HTMLParser):
             if tag not in VOID and not closing:
                 self.skip += 1
             return
-        if self.skip:
+        if self.skip or tag in DROP_TAG_ONLY:
             return
         keep = []
         for k, v in attrs:
@@ -68,7 +78,7 @@ class _San(HTMLParser):
             if self.skip:
                 self.skip -= 1
             return
-        if self.skip or tag in VOID:
+        if self.skip or tag in VOID or tag in DROP_TAG_ONLY:
             return
         if self.dropped.get(tag):
             self.dropped[tag] -= 1

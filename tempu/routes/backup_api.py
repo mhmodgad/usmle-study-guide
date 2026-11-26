@@ -40,6 +40,15 @@ def test():
 @bp.route("/run", methods=["POST"])
 def run_now():
     """'Back up now': runs even when automatic backups are off, in the background."""
+    cfg = B.get_config(g.db)
+    if not cfg["remote"]:
+        return jsonify({"ok": False, "error": "Connect Google Drive (or choose another place) first."}), 400
+    if not B.rclone_path(cfg):
+        return jsonify({"ok": False, "error": "rclone is not installed yet — press Connect Google Drive."}), 400
+    with B._LOCK_STATE:
+        busy = B._RUN_STATE.get("running")
+    if busy:
+        return jsonify({"ok": True, "already": True})
     B.run_in_background(_db(), force=True)
     return jsonify({"ok": True})
 
@@ -52,16 +61,24 @@ def log():
 
 @bp.route("/snapshots")
 def snapshots():
+    """The snapshots in the cloud — one rclone call. What each one contains is
+    fetched only when you open it (``/snapshots/<name>``)."""
     cfg = B.get_config(g.db)
+    if not cfg["remote"]:
+        return jsonify({"ok": False, "error": "Backup isn't set up yet."}), 400
     try:
-        names = B.list_remote(cfg)
+        snaps = B.list_remote_detailed(cfg)
     except B.BackupError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    out = []
-    for i, n in enumerate(names[:30]):
-        info = B.snapshot_info(cfg, n) if i < 10 else {"name": n}
-        out.append(info)
-    return jsonify({"ok": True, "snapshots": out})
+    return jsonify({"ok": True, "snapshots": snaps[:30], "total": len(snaps)})
+
+
+@bp.route("/snapshots/<name>")
+def snapshot_detail(name):
+    import re
+    if not re.fullmatch(r"user-\d{8}T\d{6}Z\.db\.gz", name):
+        return jsonify({"ok": False, "error": "Unknown snapshot."}), 400
+    return jsonify(dict(B.snapshot_info(B.get_config(g.db), name), ok=True))
 
 
 @bp.route("/restore", methods=["POST"])
@@ -70,6 +87,10 @@ def restore():
     only = [c for c in (d.get("categories") or []) if c in B.CATEGORIES] or None
     if not d.get("name"):
         return jsonify({"ok": False, "error": "Choose a snapshot."}), 400
+    with B._LOCK_STATE:
+        busy = B._RUN_STATE.get("running")
+    if busy:
+        return jsonify({"ok": False, "error": "A backup or restore is running. Try again when it has finished."}), 409
     holder = {}
 
     def job(db_path):

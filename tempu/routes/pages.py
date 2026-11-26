@@ -1,7 +1,9 @@
 """Server-rendered HTML pages."""
 import json
 
-from flask import Blueprint, render_template, g, abort, request, redirect, url_for
+from flask import Blueprint, g, abort, request, redirect, url_for
+
+from ..ui import render_template, current as ui_current
 
 from .. import service as S
 
@@ -46,16 +48,63 @@ def dashboard():
         ch = g.db.execute("SELECT * FROM chapters WHERE id=?", (cid,)).fetchone()
         if ch:
             pinned.append(ch)
+    today_panel = _today_panel() if ui_current() == "new" else None
     return render_template("dashboard.html", active="dashboard", library=primary,
                            done=done, total=total, pct=pct, cons=cons, recent=recent,
-                           week=week, pinned=pinned)
+                           week=week, pinned=pinned, today=today_panel)
+
+
+def _section_counts(section_id):
+    r = g.db.execute("SELECT COUNT(*) n, SUM(CASE WHEN p.completed=1 THEN 1 ELSE 0 END) d "
+                     "FROM topics t LEFT JOIN progress p ON p.topic_id=t.id WHERE t.section_id=?",
+                     (section_id,)).fetchone()
+    return (r["d"] or 0), (r["n"] or 0)
+
+
+def _today_panel():
+    """What to do now: where you stopped, what's next, cards due."""
+    out = {"continue": None, "next": None, "due": 0, "new_in_decks": 0}
+    row = g.db.execute(
+        "SELECT ss.section_id, ss.last_topic_id, ss.last_opened_at, s.title, s.chapter_id, s.sort_order, "
+        "c.title chapter_title, c.library_id FROM section_state ss JOIN sections s ON s.id=ss.section_id "
+        "JOIN chapters c ON c.id=s.chapter_id WHERE ss.last_opened_at IS NOT NULL "
+        "ORDER BY ss.last_opened_at DESC LIMIT 1").fetchone()
+    if row:
+        done, total = _section_counts(row["section_id"])
+        topic = None
+        if row["last_topic_id"]:
+            topic = g.db.execute("SELECT COALESCE(e.title,t.title) title FROM topics t LEFT JOIN topic_edits e "
+                                 "ON e.topic_id=t.id WHERE t.id=?", (row["last_topic_id"],)).fetchone()
+        out["continue"] = {"section_id": row["section_id"], "title": row["title"],
+                           "chapter": row["chapter_title"], "done": done, "total": total,
+                           "topic_id": row["last_topic_id"] if topic else None,
+                           "topic": topic["title"] if topic else None,
+                           "finished": total and done >= total, "when": row["last_opened_at"]}
+        # up next: the first unfinished section after it in the same chapter
+        for s in g.db.execute("SELECT id, title FROM sections WHERE chapter_id=? AND sort_order > ? "
+                              "ORDER BY sort_order", (row["chapter_id"], row["sort_order"])):
+            d, n = _section_counts(s["id"])
+            if n and d < n:
+                out["next"] = {"section_id": s["id"], "title": s["title"], "done": d, "total": n,
+                               "chapter": row["chapter_title"]}
+                break
+    now = _nowz()
+    out["due"] = g.db.execute("SELECT COUNT(*) FROM card_reviews r WHERE r.due_at IS NOT NULL AND r.due_at <= ? AND " + _LIVE,
+                              (now,)).fetchone()[0]
+    out["new_in_decks"] = g.db.execute(
+        "SELECT COUNT(DISTINCT dc.card_id) FROM deck_cards dc LEFT JOIN card_reviews r ON r.card_id=dc.card_id "
+        "WHERE r.card_id IS NULL OR r.state='new'").fetchone()[0]
+    return out
 
 
 # --------------------------------------------------------------- libraries
 @bp.route("/libraries")
 def libraries():
     libs = []
+    hide_locked = ui_current() == "new" and S.get_setting("showOnlineFeatures", "false") != "true"
     for l in S.library_rows():
+        if l["locked"] and hide_locked:
+            continue          # locked libraries can't be opened offline
         done, total = S.library_progress(l["id"]) if not l["locked"] else (0, 0)
         nchap = g.db.execute("SELECT COUNT(*) n FROM chapters WHERE library_id=?",
                              (l["id"],)).fetchone()["n"]
@@ -233,14 +282,18 @@ def _reader(section_id):
         }
     # section header image intentionally left blank for all sections
     banner = None
-    return render_template("reader.html", active="libraries", library=lib, chapter=ch,
+    sec_cards = g.db.execute("SELECT (SELECT COUNT(*) FROM cards WHERE topic_id IN (SELECT id FROM topics WHERE section_id=?)) "
+                             "+ (SELECT COUNT(*) FROM my_cards WHERE topic_id IN (SELECT id FROM topics WHERE section_id=?))",
+                             (sec["id"], sec["id"])).fetchone()[0]
+    return render_template("reader.html", active="libraries", library=lib, chapter=ch, sec_cards=sec_cards,
                            section=sec, topics=topic_views, next_section=nxt, prev_section=prv,
                            section_state=dict(st) if st else {}, sec_mine=sec_mine,
                            read_minutes=max(1, round(words / 200)) if words else 0,
                            sec_done=sec_done, sec_total=len(topics), banner=banner,
                            lib_chapters=S.chapter_rows(lib["id"]),
                            chap_sections=S.section_rows(ch["id"]),
-                           annotations_json=_json.dumps(annotations))
+                           # "<" escaped: note text like "</script>" can't end the data block
+                           annotations_json=_json.dumps(annotations).replace("<", "\\u003c"))
 
 
 # --------------------------------------------------------------- flashcards
@@ -252,10 +305,20 @@ def flashcards():
         stats = _deck_stats(d["id"])
         deck_views.append({"row": d, **stats})
     due_total = g.db.execute(
-        "SELECT COUNT(*) n FROM card_reviews WHERE due_at IS NOT NULL AND due_at<=?",
+        "SELECT COUNT(*) n FROM card_reviews r WHERE r.due_at IS NOT NULL AND r.due_at<=? AND " + _LIVE,
         (_nowz(),)).fetchone()["n"]
+    weak = []
+    if ui_current() == "new":
+        weak = g.db.execute(
+            "SELECT x.topic_id, COALESCE(e.title, t.title, 'Cards in your own decks') title, COUNT(*) n, SUM(x.lapses) lapses FROM ("
+            " SELECT c.topic_id, r.lapses FROM card_reviews r JOIN cards c ON c.id=r.card_id"
+            "  WHERE r.lapses>0 OR r.last_rating=1"
+            " UNION ALL SELECT m.topic_id, r.lapses FROM card_reviews r JOIN my_cards m ON m.id=r.card_id"
+            "  WHERE r.lapses>0 OR r.last_rating=1) x"
+            " LEFT JOIN topics t ON t.id=x.topic_id LEFT JOIN topic_edits e ON e.topic_id=x.topic_id"
+            " GROUP BY x.topic_id ORDER BY lapses DESC, n DESC LIMIT 8").fetchall()
     return render_template("flashcards.html", active="flashcards", decks=deck_views,
-                           due_total=due_total)
+                           due_total=due_total, weak=weak)
 
 
 @bp.route("/flashcards/library")
@@ -303,7 +366,7 @@ def deck(deck_id):
         "SELECT c.*, t.title topic_title FROM deck_cards dc "
         "JOIN cards c ON c.id=dc.card_id LEFT JOIN topics t ON t.id=c.topic_id "
         "WHERE dc.deck_id=? ORDER BY dc.added_at", (deck_id,)).fetchall()
-    views = [S.render_card(c) for c in cards]
+    views = [S.render_card(c) for c in cards] + [S.render_my_card(r) for r in S.my_cards_for_scope("deck", deck_id)]
     stats = _deck_stats(deck_id)
     stats.pop("cards", None)  # the template's `cards` is the card list itself
     return render_template("deck.html", active="flashcards", deck=d, cards=views, **stats)
@@ -312,11 +375,11 @@ def deck(deck_id):
 @bp.route("/flashcards/stats")
 def flashcards_stats():
     total = g.db.execute("SELECT COUNT(*) n FROM cards").fetchone()["n"]
-    reviewed = g.db.execute("SELECT COUNT(*) n FROM card_reviews").fetchone()["n"]
-    due = g.db.execute("SELECT COUNT(*) n FROM card_reviews WHERE due_at<=?",
+    reviewed = g.db.execute("SELECT COUNT(*) n FROM card_reviews r WHERE " + _LIVE).fetchone()["n"]
+    due = g.db.execute("SELECT COUNT(*) n FROM card_reviews r WHERE r.due_at<=? AND " + _LIVE,
                        (_nowz(),)).fetchone()["n"]
     by_state = {r["state"]: r["n"] for r in g.db.execute(
-        "SELECT state, COUNT(*) n FROM card_reviews GROUP BY state")}
+        "SELECT state, COUNT(*) n FROM card_reviews r WHERE " + _LIVE + " GROUP BY state")}
     return render_template("flashcards_stats.html", active="flashcards", total=total,
                            reviewed=reviewed, due=due, by_state=by_state)
 
@@ -356,13 +419,68 @@ def notes():
                            inline_count=inline_count, chapter_filter=chapter_filter)
 
 
+@bp.route("/notes/export.md")
+def notes_export():
+    """All your notes, passage notes and highlights as one Markdown file,
+    grouped by chapter > section > topic in book order."""
+    from flask import Response
+    chapter_filter = request.args.get("chapter")
+    loc = ("JOIN topics t ON t.id=x.topic_id JOIN sections s ON s.id=t.section_id "
+           "JOIN chapters c ON c.id=s.chapter_id ")
+    order_cols = "c.sort_order, c.title, s.sort_order, s.title, t.sort_order, t.title"
+    sel = ("c.title chapter_title, s.title section_title, t.title topic_title, "
+           "c.sort_order co, s.sort_order so, t.sort_order tso")
+    where = " WHERE c.id=?" if chapter_filter else ""
+    args = [chapter_filter] if chapter_filter else []
+    items = []
+    for r in g.db.execute(f"SELECT {sel}, x.plain_text body FROM topic_notes x {loc}{where}", args):
+        items.append((r, 0, "", r["body"]))
+    for r in g.db.execute(f"SELECT {sel}, x.selected_text quote, x.note_text body FROM inline_notes x {loc}{where}", args):
+        items.append((r, 1, r["quote"], r["body"]))
+    for r in g.db.execute(f"SELECT {sel}, x.selected_text quote FROM highlights x {loc}{where}", args):
+        items.append((r, 2, r["quote"], ""))
+    import re as _re
+    _junk = _re.compile("[\u200b\u200c\u200d\ufeff\ufffc]")
+    items = [(r, k, _junk.sub("", q or ""), _junk.sub("", b or "")) for r, k, q, b in items]
+    items.sort(key=lambda i: (i[0]["co"] or 0, i[0]["chapter_title"] or "", i[0]["so"] or 0, i[0]["section_title"] or "",
+                              i[0]["tso"] or 0, i[0]["topic_title"] or "", i[1]))
+    out, last = ["# My notes\n"], (None, None, None)
+    for r, kind, quote, body in items:
+        ch, se, to = r["chapter_title"], r["section_title"], r["topic_title"]
+        if ch != last[0]:
+            out.append(f"\n## {ch}\n")
+        if (ch, se) != last[:2]:
+            out.append(f"\n### {se}\n")
+        if (ch, se, to) != last:
+            out.append(f"\n#### {to}\n")
+        last = (ch, se, to)
+        if kind == 0 and (body or "").strip():
+            out.append((body or "").strip() + "\n")
+        elif kind == 1:
+            out.append("> " + " ".join((quote or "").split()) + "\n")
+            if (body or "").strip():
+                out.append("\n" + body.strip() + "\n")
+        elif kind == 2 and (quote or "").strip():
+            out.append("- \u201c" + " ".join(quote.split()) + "\u201d\n")
+    if not items:
+        out.append("\n_No notes or highlights yet._\n")
+    return Response("".join(out), mimetype="text/markdown",
+                    headers={"Content-Disposition": "attachment; filename=tempu-notes.md"})
+
+
 # --------------------------------------------------------------- collections
 @bp.route("/collections")
 def collections():
     tab = request.args.get("tab", "personal")
     kind = "official" if tab == "tempu-hy" else "personal"
-    rows = g.db.execute(
-        "SELECT * FROM collections WHERE kind=? ORDER BY rowid", (kind,)).fetchall()
+    if kind == "personal":
+        rows = g.db.execute(
+            "SELECT m.*, 'personal' kind, NULL library_title, "
+            "(SELECT COUNT(*) FROM my_collection_items i WHERE i.collection_id=m.id) item_count "
+            "FROM my_collections m ORDER BY m.created_at DESC, m.rowid DESC").fetchall()
+    else:
+        rows = g.db.execute(
+            "SELECT * FROM collections WHERE kind='official' ORDER BY rowid").fetchall()
     has_official = g.db.execute(
         "SELECT COUNT(*) n FROM collections WHERE kind='official'").fetchone()["n"] > 0
     return render_template("collections.html", active="collections", tab=tab,
@@ -371,7 +489,12 @@ def collections():
 
 @bp.route("/collections/<collection_id>")
 def collection(collection_id):
-    col = g.db.execute("SELECT * FROM collections WHERE id=?", (collection_id,)).fetchone()
+    col = g.db.execute("SELECT m.*, 'personal' kind, NULL library_title FROM my_collections m WHERE id=?",
+                       (collection_id,)).fetchone()
+    items_table = "my_collection_items"
+    if not col:
+        col = g.db.execute("SELECT * FROM collections WHERE id=? AND kind='official'", (collection_id,)).fetchone()
+        items_table = "collection_items"
     if not col:
         abort(404)
     items = g.db.execute(
@@ -382,7 +505,7 @@ def collection(collection_id):
         "COALESCE(ch.title, ch2.title) chapter_title, "
         "COALESCE(ch.library_id, ch2.library_id) library_id, "
         "COALESCE(ts.id, ci.section_id) open_section "
-        "FROM collection_items ci "
+        "FROM " + items_table + " ci "
         "LEFT JOIN topics t ON t.id=ci.topic_id "
         "LEFT JOIN sections ts ON ts.id=t.section_id "
         "LEFT JOIN chapters ch ON ch.id=ts.chapter_id "
@@ -455,7 +578,10 @@ def activity():
 @bp.route("/search")
 def search_page():
     q = request.args.get("q", "").strip()
-    return render_template("search.html", active="", q=q)
+    lib = S._step2ck() if hasattr(S, "_step2ck") else None
+    chapters = S.chapter_rows(lib) if lib else []
+    return render_template("search.html", active="", q=q, chapters=chapters,
+                           kind=request.args.get("kind", "all"), chapter=request.args.get("chapter", ""))
 
 
 # --------------------------------------------------------------- simple/marketing
@@ -510,18 +636,24 @@ def _grouped(tids, table):
     return out
 
 
+# Review rows outlive their card (a card you made and deleted, a library card
+# removed by a content update). Counts only include cards that still exist.
+_LIVE = "(r.card_id IN (SELECT id FROM cards) OR r.card_id IN (SELECT id FROM my_cards))"
+_LIVE_DC = "(dc.card_id IN (SELECT id FROM cards) OR dc.card_id IN (SELECT id FROM my_cards))"
+
+
 def _deck_stats(deck_id):
-    n = g.db.execute("SELECT COUNT(*) n FROM deck_cards WHERE deck_id=?",
+    n = g.db.execute("SELECT COUNT(*) n FROM deck_cards dc WHERE deck_id=? AND " + _LIVE_DC,
                      (deck_id,)).fetchone()["n"]
     due = g.db.execute(
         "SELECT COUNT(*) n FROM deck_cards dc JOIN card_reviews r ON r.card_id=dc.card_id "
-        "WHERE dc.deck_id=? AND r.due_at<=?", (deck_id, _nowz())).fetchone()["n"]
+        "WHERE dc.deck_id=? AND r.due_at<=? AND " + _LIVE, (deck_id, _nowz())).fetchone()["n"]
     new = g.db.execute(
         "SELECT COUNT(*) n FROM deck_cards dc LEFT JOIN card_reviews r ON r.card_id=dc.card_id "
-        "WHERE dc.deck_id=? AND r.card_id IS NULL", (deck_id,)).fetchone()["n"]
+        "WHERE dc.deck_id=? AND r.card_id IS NULL AND " + _LIVE_DC, (deck_id,)).fetchone()["n"]
     learn = g.db.execute(
         "SELECT COUNT(*) n FROM deck_cards dc JOIN card_reviews r ON r.card_id=dc.card_id "
-        "WHERE dc.deck_id=? AND r.state='learning'", (deck_id,)).fetchone()["n"]
+        "WHERE dc.deck_id=? AND r.state='learning' AND " + _LIVE, (deck_id,)).fetchone()["n"]
     return {"cards": n, "due": due, "new": new, "learn": learn}
 
 
@@ -545,11 +677,23 @@ def _consistency_summary(full=False):
     while cur.isoformat() in dayset:
         streak += 1
         cur -= datetime.timedelta(days=1)
+    # new layout: a streak up to yesterday is still alive today (today isn't over yet)
+    live = 0
+    cur = datetime.date.today()
+    if cur.isoformat() not in dayset:
+        cur -= datetime.timedelta(days=1)
+    while cur.isoformat() in dayset:
+        live += 1
+        cur -= datetime.timedelta(days=1)
+    last_day = max(dayset) if dayset else None
+    days_since = (datetime.date.today() - datetime.date.fromisoformat(last_day)).days if last_day else None
     longest = _longest_streak(sorted(dayset))
     total_minutes = int(round(total_units * 15))
     out = {"goal_units": goal_units, "total_units": round(total_units, 1),
            "active_days": active, "days_at_goal": at_goal, "today_units": today_units,
            "current_streak": streak, "longest_streak": longest,
+           "live_streak": live, "studied_today": datetime.date.today().isoformat() in dayset,
+           "days_since": days_since,
            "total_hours": total_minutes // 60, "total_mins": total_minutes % 60,
            "avg_units": round(total_units / active, 1) if active else 0}
     if full:

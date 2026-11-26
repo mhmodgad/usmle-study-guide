@@ -6,7 +6,10 @@
   const LIB = root.dataset.library;
   const tree = document.getElementById('org-tree');
   const J = {'Content-Type': 'application/json'};
-  const api = (method, url, body) => fetch(url, {method, headers: J, body: body ? JSON.stringify(body) : undefined}).then(r => r.json());
+  // every call reports the server's reason when it refuses (e.g. "'Cardio' is in the trash. Restore it first.")
+  const api = (method, url, body) => fetch(url, {method, headers: J, body: body ? JSON.stringify(body) : undefined})
+    .then(r => r.json().catch(() => ({error: 'Something went wrong (' + r.status + ')'})))
+    .then(d => { if (d && d.error) toast(d.error); return d; });
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
   const toast = m => { let t = document.getElementById('tempu-toast'); if (!t) { t = document.createElement('div'); t.id = 'tempu-toast'; document.body.appendChild(t); } t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); };
   const OPEN_KEY = 'tempu-org-open:' + LIB;
@@ -286,7 +289,8 @@
     const b = e.target.closest('[data-t]'); if (!b) return;
     const it = b.closest('.org-trash-item');
     if (b.dataset.t === 'purge' && !confirm('Delete forever? This cannot be undone.')) return;
-    await api('POST', `/api/structure/${it.dataset.kind}/${it.dataset.id}/${b.dataset.t}`);
+    const res = await api('POST', `/api/structure/${it.dataset.kind}/${it.dataset.id}/${b.dataset.t}`);
+    if (!res || res.error || res.ok === false) return;          // the reason was shown already
     toast(b.dataset.t === 'restore' ? 'Restored' : 'Deleted forever');
     drawTrash(); load(b.dataset.t === 'restore' ? `${it.dataset.kind}-${it.dataset.id}` : null);
   });

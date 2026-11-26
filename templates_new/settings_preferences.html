@@ -1,0 +1,33 @@
+{% extends "settings_layout.html" %}
+{% set settings_tab = 'preferences' %}
+{% set page_title = 'Preferences' %}
+{% block settings_body %}
+<form data-settings data-reload="1" class="flex flex-col gap-6">
+  <h2 class="text-lg font-semibold">Preferences</h2>
+  <div>
+    <p class="text-sm font-medium">Study focus</p>
+    <div class="mt-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm">Target exam: <b>USMLE Step 2 CK</b></div>
+  </div>
+  <label class="block">
+    <span class="text-sm font-medium">Daily study goal</span>
+    <span class="mt-1 block text-xs text-muted-foreground">The point at which a day on your consistency heatmap reaches full colour. Videos, questions and in-app reading all count toward it.</span>
+    <select name="dailyStudyGoalUnits" class="mt-2 h-10 w-full rounded-lg border bg-background px-3 text-sm">
+      {% set goals = [('4','1 hour a day'), ('6','1.5 hours a day'), ('8','2 hours a day'), ('12','3 hours a day'), ('16','4 hours a day'), ('24','6 hours a day'), ('32','8 hours a day')] %}
+      {% for val, label in goals %}<option value="{{ val }}" {{ 'selected' if current.get('dailyStudyGoalUnits','8')==val }}>{{ label }}</option>{% endfor %}
+    </select>
+    <span class="mt-2 block text-xs text-muted-foreground">Changing this recolours your whole heatmap, past days included. Nothing you have logged is altered, and your streaks never change: those only need 15 minutes a day whatever the goal.</span>
+  </label>
+  <div class="border-t pt-4">
+    <p class="text-sm font-medium">Menu</p>
+    <label class="mt-2 flex items-start gap-3">
+      <input type="checkbox" name="showOnlineFeatures" {{ 'checked' if current.get('showOnlineFeatures','false')=='true' }} class="mt-0.5">
+      <span><span class="text-sm font-medium">Show online-only features</span><br><span class="text-xs text-muted-foreground">Mentorship, Ask TEMPU, Tutoring, Billing, locked libraries and the notifications captured from the live site. They don't work in this offline app, so they're hidden by default.</span></span>
+    </label>
+  </div>
+  <div class="flex items-center gap-3">
+    <button type="submit" disabled class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">Save preferences</button>
+    <span class="save-status text-sm text-muted-foreground"></span>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/settings.js') }}"></script>{% endblock %}

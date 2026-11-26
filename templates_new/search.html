@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Search | TEMP-U{% endblock %}
+{% block main %}
+<div class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+  <h1 class="text-2xl font-semibold tracking-tight">Search</h1>
+  <p class="mt-1 text-sm text-muted-foreground">Topics, your notes and highlights, and flashcards. <kbd class="th-kbd">↑</kbd> <kbd class="th-kbd">↓</kbd> to move, <kbd class="th-kbd">Enter</kbd> to open.</p>
+  <input id="page-search" type="search" value="{{ q }}" placeholder="Search everything…" autofocus autocomplete="off"
+         class="mt-4 h-11 w-full rounded-xl border bg-background px-4 text-sm outline-none focus-visible:ring-3 focus-visible:ring-control-focus">
+  <div class="srch-bar">
+    <div class="srch-tabs" role="tablist">
+      {% for k, label in [('all','All'), ('topics','Topics'), ('notes','My notes & highlights'), ('cards','Flashcards')] %}
+      <button type="button" role="tab" data-kind="{{ k }}" aria-selected="{{ 'true' if kind == k else 'false' }}">{{ label }}<span class="srch-n" data-count="{{ k }}"></span></button>
+      {% endfor %}
+    </div>
+    <select id="srch-chapter" class="th-input" aria-label="Limit to a chapter">
+      <option value="">All chapters</option>
+      {% for c in chapters %}<option value="{{ c.id }}" {{ 'selected' if chapter == c.id }}>{{ c.title }}</option>{% endfor %}
+    </select>
+  </div>
+  <div id="page-results" class="mt-3"></div>
+</div>
+{% endblock %}
+{% block scripts %}<script>
+(function () {
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  const inp = document.getElementById('page-search'), out = document.getElementById('page-results'), chSel = document.getElementById('srch-chapter');
+  let kind = {{ kind|tojson }}, t, seq = 0, sel = -1;
+  const tabs = [...document.querySelectorAll('.srch-tabs button')];
+  const groupName = {topics: 'Topics', notes: 'My notes & highlights', cards: 'Flashcards'};
+  function setUrl() {
+    const u = new URL(location.href);
+    u.searchParams.set('q', inp.value.trim()); u.searchParams.set('kind', kind);
+    chSel.value ? u.searchParams.set('chapter', chSel.value) : u.searchParams.delete('chapter');
+    history.replaceState(null, '', u);
+  }
+  async function run() {
+    const q = inp.value.trim(); setUrl();
+    if (q.length < 2) { out.innerHTML = '<p class="text-sm text-muted-foreground">Type at least 2 letters.</p>'; return; }
+    const my = ++seq;
+    const d = await (await fetch('/api/search/all?' + new URLSearchParams({q, kind: 'all', chapter: chSel.value}))).json();
+    if (my !== seq) return;                       // a newer search is running
+    const counts = {topics: d.topics.length, notes: d.notes.length, cards: d.cards.length};
+    counts.all = counts.topics + counts.notes + counts.cards;
+    document.querySelectorAll('[data-count]').forEach(s => s.textContent = counts[s.dataset.count] ? ' ' + counts[s.dataset.count] : '');
+    const groups = kind === 'all' ? ['topics', 'notes', 'cards'] : [kind];
+    let html = '';
+    for (const g of groups) {
+      if (!d[g].length) continue;
+      if (kind === 'all') html += `<h2 class="srch-h">${groupName[g]} <span class="th-muted">${d[g].length}</span></h2>`;
+      html += d[g].map(i => `<a href="${esc(i.href)}" class="srch-item">
+        <span class="srch-title">${i.type ? `<span class="srch-type">${esc(i.type)}</span>` : ''}${esc(i.title)}</span>
+        <span class="srch-where">${esc(i.where || '')}</span>
+        ${i.snippet ? `<span class="srch-snip">${i.snippet}</span>` : ''}</a>`).join('');
+    }
+    out.innerHTML = html || `<p class="text-sm text-muted-foreground">Nothing found for “${esc(q)}”${chSel.value ? ' in this chapter' : ''}.${kind !== 'all' ? ' Try the <b>All</b> tab.' : ''}</p>`;
+    sel = -1;
+  }
+  tabs.forEach(b => b.addEventListener('click', () => {
+    kind = b.dataset.kind; tabs.forEach(x => x.setAttribute('aria-selected', x === b)); run(); inp.focus();
+  }));
+  chSel.addEventListener('change', run);
+  inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(run, 220); });
+  inp.addEventListener('keydown', e => {
+    const items = [...out.querySelectorAll('.srch-item')];
+    if (!items.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items.forEach((x, i) => x.classList.toggle('sel', i === sel));
+      items[sel].scrollIntoView({block: 'nearest'});
+    } else if (e.key === 'Enter') {
+      e.preventDefault(); location.href = items[Math.max(0, sel)].href;
+    }
+  });
+  if (inp.value) run();
+})();
+</script>{% endblock %}

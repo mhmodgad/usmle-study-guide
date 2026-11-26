@@ -124,21 +124,45 @@
   });
 
   // ------------------------------------------------------------------ backup chip
+  // One status request per minute (every 5 s while a backup runs); none while the
+  // tab is hidden. Settings -> Backup feeds the chip from its own polling instead.
+  function paintChip(chip, s) {
+    chip.dataset.state = s.state;
+    let label = s.text;
+    if (s.state === 'ok' && s.last_ok) label = 'Backed up ' + when(s.last_ok);
+    chip.querySelector('.th-label').textContent = label;
+    chip.title = s.last_error ? 'Last backup failed: ' + s.last_error :
+      (s.state === 'off' ? 'Cloud backup is off. Your changes are saved on this computer.' :
+        'Everything is saved on this computer. ' + label + '.');
+    chip.hidden = false;
+  }
+  function scheduleChip(chip, ms) {
+    clearTimeout(chip._t);
+    chip._t = setTimeout(() => refreshChip(chip), ms);
+  }
   async function refreshChip(chip) {
+    clearTimeout(chip._t);
+    if (chip._external) return;                         // the backup settings page is polling
+    if (document.hidden) { chip._stale = true; return; } // resumes on visibilitychange
+    if (chip._inflight) return;
+    chip._inflight = true;
     try {
       const s = await (await origFetch('/api/backup/status')).json();
-      chip.dataset.state = s.state;
-      let label = s.text;
-      if (s.state === 'ok' && s.last_ok) label = 'Backed up ' + when(s.last_ok);
-      chip.querySelector('.th-label').textContent = label;
-      chip.title = s.last_error ? 'Last backup failed: ' + s.last_error :
-        (s.state === 'off' ? 'Cloud backup is off. Your changes are saved on this computer.' :
-          'Everything is saved on this computer. ' + label + '.');
-      chip.hidden = false;
-      clearTimeout(chip._t);
-      chip._t = setTimeout(() => refreshChip(chip), s.state === 'running' ? 3000 : 60000);
-    } catch (e) { chip.hidden = true; }
+      paintChip(chip, s);
+      scheduleChip(chip, s.state === 'running' ? 5000 : 60000);
+    } catch (e) { chip.hidden = true; scheduleChip(chip, 120000); }
+    finally { chip._inflight = false; }
   }
+  function updateChip(s) {               // called by Settings -> Backup with each status it fetched
+    const chip = document.getElementById('th-chip');
+    if (!chip) return;
+    chip._external = true; clearTimeout(chip._t);
+    paintChip(chip, s);
+  }
+  document.addEventListener('visibilitychange', () => {
+    const chip = document.getElementById('th-chip');
+    if (chip && !document.hidden && chip._stale) { chip._stale = false; refreshChip(chip); }
+  });
   addEventListener('DOMContentLoaded', () => {
     // use the app's own font for the toast/dialogs (it is set on an inner wrapper, not <body>)
     try {
@@ -217,5 +241,5 @@
     if (list.length) show(0);
   }
 
-  window.TempuHistory = {undo, redo, toast, openTopic, when, esc, reloadWith};
+  window.TempuHistory = {undo, redo, toast, openTopic, when, esc, reloadWith, updateChip};
 })();

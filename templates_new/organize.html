@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Organize {{ library.title }} | TEMP-U{% endblock %}
+{% block main %}
+<div class="org-root mx-auto flex w-full max-w-4xl flex-col gap-5" data-library="{{ library.id }}">
+  <div class="flex flex-wrap items-end justify-between gap-3">
+    <div>
+      <a href="/libraries/{{ library.id }}" class="text-sm text-muted-foreground hover:underline">‹ {{ library.title }}</a>
+      <h1 class="mt-1 text-2xl font-bold tracking-tight">Organize {{ library.title }}</h1>
+      <p class="mt-1 text-sm text-muted-foreground">Drag <b>⋮⋮</b> to reorder or move chapters, sections and topics. Drop a section on a chapter (or a topic on a section) to move it inside. Double-click a name to rename. Everything saves instantly and survives content updates.</p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <input id="org-filter" type="search" placeholder="Filter…" class="h-9 w-48 rounded-lg border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+      <button id="org-expand" class="h-9 rounded-lg border px-3 text-sm hover:bg-accent">Expand all</button>
+      <button id="org-collapse" class="h-9 rounded-lg border px-3 text-sm hover:bg-accent">Collapse all</button>
+      <button id="org-trash-btn" class="h-9 rounded-lg border px-3 text-sm hover:bg-accent">🗑 Trash <span id="org-trash-n" class="tabular-nums"></span></button>
+      <button id="org-add-chapter" class="h-9 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground">+ New chapter</button>
+    </div>
+  </div>
+  <div id="org-tree" class="org-tree rounded-2xl border bg-card p-2"><p class="p-6 text-center text-sm text-muted-foreground">Loading…</p></div>
+</div>
+
+<div id="org-trash" class="fixed inset-y-0 right-0 z-[70] hidden w-full max-w-md flex-col border-l bg-card shadow-2xl">
+  <div class="flex h-14 shrink-0 items-center justify-between border-b px-4">
+    <h3 class="font-semibold">Trash</h3>
+    <button id="org-trash-close" class="rounded-md p-2 hover:bg-accent" aria-label="Close">✕</button>
+  </div>
+  <div id="org-trash-list" class="flex-1 overflow-auto p-3"></div>
+</div>
+
+<div id="org-move" class="fixed inset-0 z-[80] hidden items-center justify-center bg-black/50 p-4">
+  <div class="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl">
+    <div class="flex items-center justify-between border-b px-5 py-3"><h3 id="org-move-title" class="font-semibold">Move to…</h3><button id="org-move-close" class="rounded-md p-2 hover:bg-accent">✕</button></div>
+    <div class="border-b p-3"><input id="org-move-q" type="search" placeholder="Search…" class="h-9 w-full rounded-lg border bg-background px-3 text-sm outline-none"></div>
+    <div id="org-move-list" class="flex-1 overflow-auto p-2"></div>
+  </div>
+</div>
+<input id="org-icon-file" type="file" accept="image/*" class="hidden">
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/organize.js') }}"></script>{% endblock %}

@@ -39,15 +39,22 @@ TRACKED = {
     "topics":           ("base", ("id",), ("document_html", "plain_text")),
     "struct_overrides": ("main", ("kind", "id"), ()),
     "topic_edits":      ("main", ("topic_id",), ()),
+    "my_cards":         ("main", ("id",), ()),
+    "deck_cards":       ("main", ("deck_id", "card_id"), ()),
 }
 IGNORE_IN_COMPARE = {"updated_at"}
 INLINE_LIMIT = 1500          # revision payloads larger than this go to doc_texts
 COALESCE_SECONDS = 120       # autosaves closer together than this merge into one changeset
+COALESCE_MAX_SPAN = 600      # ...but one merged entry never covers more than 10 minutes of editing
 NOT_UNDOABLE = {"import"}
 
 
 def _now():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _ts(iso):
+    return datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).timestamp()
 
 
 def new_id(at=None, offset=0):
@@ -119,6 +126,24 @@ def _pack(conn, row):
     conn.execute("INSERT OR IGNORE INTO doc_texts(hash, body) VALUES(?,?)",
                  (h, zlib.compress(text.encode("utf-8"), 6)))
     return "@" + h
+
+
+def _drop_if_unused(conn, ref):
+    """Delete a stored text that no revision points to any more."""
+    if not ref or not ref.startswith("@"):
+        return
+    if conn.execute("SELECT 1 FROM revisions WHERE before=? OR after=? LIMIT 1", (ref, ref)).fetchone():
+        return
+    conn.execute("DELETE FROM doc_texts WHERE hash=?", (ref[1:],))
+
+
+def compact(conn):
+    """Remove stored texts nothing refers to (left by older versions). Returns how many."""
+    n = conn.execute(
+        "DELETE FROM doc_texts WHERE '@'||hash NOT IN (SELECT before FROM revisions WHERE before LIKE '@%' "
+        "UNION SELECT after FROM revisions WHERE after LIKE '@%')").rowcount
+    conn.commit()
+    return n
 
 
 def unpack(conn, ref):
@@ -212,23 +237,34 @@ class Change:
 
     def __enter__(self):
         install(self.conn)
+        # Already recording (a Change inside a Change)? Then this block simply
+        # becomes part of the outer one: one undo step, nothing lost.
+        self.nested = bool(self.conn.execute("SELECT v FROM _cap_on").fetchone()[0])
+        if self.nested:
+            return self
         self.conn.execute("DELETE FROM _cap")
         self.conn.execute("UPDATE _cap_on SET v=1")
         return self
 
     def __exit__(self, exc_type, exc, tb):
         conn = self.conn
+        if self.nested:
+            return False                   # the outer Change stores (or rolls back) everything
         conn.execute("UPDATE _cap_on SET v=0")
         if exc_type is not None:
             conn.rollback()
             conn.execute("DELETE FROM _cap")
             return False
-        caps = conn.execute("SELECT * FROM _cap ORDER BY seq").fetchall()
-        conn.execute("DELETE FROM _cap")
-        folded = _fold(caps)
-        if folded or self.reverts:
-            self._store(folded)
-        conn.commit()
+        try:
+            caps = conn.execute("SELECT * FROM _cap ORDER BY seq").fetchall()
+            conn.execute("DELETE FROM _cap")
+            folded = _fold(caps)
+            if folded or self.reverts:
+                self._store(folded)
+            conn.commit()
+        except Exception:
+            conn.rollback()            # never leave a half-recorded change behind
+            raise
         return False
 
     # -- storing
@@ -240,12 +276,16 @@ class Change:
             return None
         if self.session and last["session"] and last["session"] != self.session:
             return None
+        # a checkpoint was saved after this entry: what comes next is "after the checkpoint"
+        if self.conn.execute("SELECT 1 FROM checkpoints WHERE changeset_id=?", (last["id"],)).fetchone():
+            return None
         try:
-            age = time.time() - datetime.datetime.fromisoformat(
-                last["updated_at"].replace("Z", "+00:00")).timestamp()
+            now = time.time()
+            age = now - _ts(last["updated_at"])
+            span = now - _ts(last["created_at"])
         except ValueError:
             return None
-        return last["id"] if age < COALESCE_SECONDS else None
+        return last["id"] if age < COALESCE_SECONDS and span < COALESCE_MAX_SPAN else None
 
     def _store(self, folded):
         conn = self.conn
@@ -267,6 +307,7 @@ class Change:
                     else:
                         conn.execute("UPDATE revisions SET op=?, before=?, after=? WHERE id=?",
                                      (merged[0], _pack(conn, merged[1]), _pack(conn, merged[2]), prev["id"]))
+                    _drop_if_unused(conn, prev["after"])     # the replaced copy of the text
                 else:
                     seq += 1
                     conn.execute("INSERT INTO revisions(changeset_id,seq,tbl,pk,op,before,after) "
@@ -286,7 +327,10 @@ class Change:
             conn.execute("INSERT INTO revisions(changeset_id,seq,tbl,pk,op,before,after) VALUES(?,?,?,?,?,?,?)",
                          (self.id, i, tbl, pk, op, _pack(conn, before), _pack(conn, after)))
         for rid in self.reverts:
-            conn.execute("UPDATE changesets SET undone=1 WHERE id=?", (rid,))
+            if rid.startswith("+"):                    # re-applied: in effect again
+                conn.execute("UPDATE changesets SET undone=0 WHERE id=?", (rid[1:],))
+            else:
+                conn.execute("UPDATE changesets SET undone=1 WHERE id=?", (rid,))
         self.rows = len(folded)
 
     def info(self):
@@ -309,8 +353,10 @@ def _same(a, b):
     return a == b or (a in (None, "") and b in (None, ""))
 
 
-def _invert(conn, changeset_id, force=False, dry=False):
+def _invert(conn, changeset_id, force=False, dry=False, forward=False):
     """Write every row of a changeset back to its 'before' state (newest first).
+    With ``forward`` it does the opposite: writes the 'after' state again (oldest
+    first), i.e. re-applies the changeset.
 
     Returns (conflicts, touched_topic_ids). A field that was changed again after
     this changeset keeps its newer value and is reported as a conflict; a row
@@ -329,7 +375,7 @@ def _invert(conn, changeset_id, force=False, dry=False):
     def put(table, pkv, row):
         sim[(table, tuple(pkv))] = row
 
-    revs = conn.execute("SELECT * FROM revisions WHERE changeset_id=? ORDER BY seq DESC",
+    revs = conn.execute("SELECT * FROM revisions WHERE changeset_id=? ORDER BY seq " + ("ASC" if forward else "DESC"),
                         (changeset_id,)).fetchall()
     for r in revs:
         table = r["tbl"]
@@ -338,12 +384,16 @@ def _invert(conn, changeset_id, force=False, dry=False):
         schema = TRACKED[table][0]
         pkv = json.loads(r["pk"])
         before, after = unpack(conn, r["before"]), unpack(conn, r["after"])
+        op = r["op"]
+        if forward:
+            before, after = after, before
+            op = {"I": "D", "D": "I"}.get(op, op)
         cur = cur_of(table, pkv)
         if table == "topics":
             touched.add(pkv[0])
         elif table == "topic_edits":
             touched.add(pkv[0])
-        if r["op"] == "I":                         # created here -> delete it again
+        if op == "I":                              # created here -> delete it again
             if cur is None:
                 continue
             changed = [k for k, v in (after or {}).items()
@@ -355,7 +405,7 @@ def _invert(conn, changeset_id, force=False, dry=False):
             if not dry:
                 conn.execute(f"DELETE FROM {schema}.{table} WHERE {_where(table)}", pkv)
             put(table, pkv, None)
-        elif r["op"] == "D":                       # deleted here -> put it back
+        elif op == "D":                            # deleted here -> put it back
             if cur is not None:
                 conflicts.append({"table": table, "pk": pkv, "fields": [], "what": "exists again"})
                 continue
@@ -447,7 +497,10 @@ def undo(conn, changeset_id, force=False, label=None):
                 reverts=[changeset_id]) as ch:
         _, touched = _invert(conn, changeset_id, force=force)
         for rid in json.loads(cs["reverts"] or "[]"):        # undoing an undo: the original is live again
-            conn.execute("UPDATE changesets SET undone=0 WHERE id=?", (rid,))
+            if rid.startswith("+"):                          # undoing a re-apply: taken back again
+                conn.execute("UPDATE changesets SET undone=1 WHERE id=?", (rid[1:],))
+            else:
+                conn.execute("UPDATE changesets SET undone=0 WHERE id=?", (rid,))
         reindex_topics(conn, touched)
     return ch, conflicts
 
@@ -477,26 +530,48 @@ def latest_redoable(conn):
 
 
 def restore_to(conn, after_changeset_id, label):
-    """Undo every change made after ``after_changeset_id`` (None = all of them) as ONE changeset."""
-    q = "SELECT id FROM changesets WHERE undone=0 AND kind!='import'"
+    """Bring everything back to how it was right after ``after_changeset_id``
+    (None = before any change), as ONE changeset.
+
+    Every changeset recorded after that point is reverted, newest first,
+    including undos and redos: an undo is reverted (its change comes back)
+    and then the change itself is reverted, so a change you had already undone
+    stays gone. Only the changes that were in effect are marked as undone, so
+    undoing the restore puts the flags back exactly as they were."""
+    q = "SELECT id, undone FROM changesets WHERE kind NOT IN ('import')"
     args = ()
     if after_changeset_id:
         q += " AND id > ?"
         args = (after_changeset_id,)
-    ids = [r[0] for r in conn.execute(q + " ORDER BY id DESC", args)]
-    if not ids:
+    rows = conn.execute(q + " ORDER BY id DESC", args).fetchall()
+    live = [r["id"] for r in rows if not r["undone"]]
+    if not live:
         return None
     touched_all = set()
-    with Change(conn, label, kind="restore", reverts=ids) as ch:
-        for cid in ids:
-            _, touched = _invert(conn, cid, force=True)
+    with Change(conn, label, kind="restore", reverts=live) as ch:
+        for r in rows:
+            _, touched = _invert(conn, r["id"], force=True)
             touched_all |= touched
-            cs = get(conn, cid)
-            for rid in json.loads(cs["reverts"] or "[]"):
-                if rid not in ids:
-                    conn.execute("UPDATE changesets SET undone=0 WHERE id=?", (rid,))
         reindex_topics(conn, touched_all)
     return ch
+
+
+def reapply(conn, changeset_id, label=None, force=False):
+    """Re-apply ONE change that a restore took back (redo of a single item),
+    leaving the rest of the restore as it is. Returns (Change|None, conflicts)."""
+    cs = get(conn, changeset_id)
+    if not cs:
+        raise KeyError(changeset_id)
+    if not cs["undone"]:
+        return None, []
+    conflicts, _ = _invert(conn, changeset_id, dry=True, forward=True)
+    if conflicts and not force:
+        return None, conflicts
+    with Change(conn, label or ("Redid: " + _strip(cs["label"])), kind="redo",
+                scope=(cs["scope_kind"], cs["scope_id"]), reverts=["+" + changeset_id]) as ch:
+        _, touched = _invert(conn, changeset_id, force=force, forward=True)
+        reindex_topics(conn, touched)
+    return ch, conflicts
 
 
 # ------------------------------------------------------------------ reading history

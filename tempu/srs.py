@@ -88,7 +88,9 @@ def schedule(row, rating, fuzz=True):
         else:
             if rating == 2:        # Hard
                 ease = max(MIN_EASE, ease - HARD_PENALTY)
-                interval = _clamp_days(max(interval, 1) * HARD_MULT, fuzz)
+                # at least one day more than before (1.2 x 2 days rounds back to 2)
+                interval = max(int(round(interval)) + 1, _clamp_days(max(interval, 1) * HARD_MULT, fuzz))
+                interval = min(MAX_INTERVAL, interval)
             elif rating == 3:      # Good
                 base = SECOND_INTERVAL if interval <= GRADUATING_INTERVAL else interval * ease
                 interval = _clamp_days(base, fuzz)

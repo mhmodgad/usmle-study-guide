@@ -58,11 +58,16 @@
   const textOf = a => a.querySelector('.bn-editor') || a;
   const titleOf = a => a.querySelector('h2')?.textContent || 'Topic';
 
+  // Context around the EXACT selection (not the first place the same words occur),
+  // so a phrase that appears twice is found again in the right place.
   function quoteContext(article, range) {
-    const full = textOf(article).innerText, sel = range.toString();
-    const idx = full.indexOf(sel);
-    return {prefix: idx > 0 ? full.slice(Math.max(0, idx - 20), idx) : '',
-            suffix: idx >= 0 ? full.slice(idx + sel.length, idx + sel.length + 20) : ''};
+    const root = textOf(article);
+    const before = document.createRange(), after = document.createRange();
+    try {
+      before.setStart(root, 0); before.setEnd(range.startContainer, range.startOffset);
+      after.setStart(range.endContainer, range.endOffset); after.setEnd(root, root.childNodes.length);
+    } catch (e) { return {prefix: '', suffix: ''}; }
+    return {prefix: before.toString().slice(-32), suffix: after.toString().slice(0, 32)};
   }
 
   // ---- selection -> create ----
@@ -188,38 +193,57 @@
   });
 
   // ---- re-apply saved annotations on load (text-quote anchoring) ----
-  function findRange(article, selected, prefix) {
-    const root = textOf(article), hay = root.innerText;
-    let at = -1;
-    if (prefix) { const p = hay.indexOf(prefix + selected); if (p >= 0) at = p + prefix.length; }
-    if (at < 0) at = hay.indexOf(selected);
-    if (at < 0) return null;
+  // Text-quote anchoring on the visible characters only. Spacing is ignored on
+  // both sides: a selection across two lines is saved with a line break, while
+  // the page has other (or no) whitespace between those blocks. Each kept
+  // character remembers its text node + offset, so the match maps straight
+  // back to a DOM range (no mixing of rendered and raw text positions).
+  const squash = s => (s || '').replace(/[\s\u200b\u00a0]+/g, '');
+  function charMap(root) {
+    const chars = [], where = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let pos = 0, sN = null, sO = 0, eN = null, eO = 0, node; const end = at + selected.length;
+    let node;
     while ((node = walker.nextNode())) {
-      const len = node.length;
-      if (!sN && pos + len > at) { sN = node; sO = at - pos; }
-      if (pos + len >= end) { eN = node; eO = end - pos; break; }
-      pos += len;
+      const t = node.data;
+      for (let k = 0; k < t.length; k++) {
+        if (/[\s\u200b\u00a0]/.test(t[k])) continue;
+        chars.push(t[k]); where.push([node, k]);
+      }
     }
-    if (!sN || !eN) return null;
+    return {text: chars.join(''), where};
+  }
+  function findRange(article, selected, prefix, suffix) {
+    const sel = squash(selected); if (!sel) return null;
+    const pre = squash(prefix), suf = squash(suffix);
+    const {text, where} = charMap(textOf(article));     // fresh: wrapping splits text nodes
+    let at = -1;
+    for (const [p, q] of [[pre, suf], [pre, ''], ['', suf]]) {       // most specific first
+      if (!p && !q) continue;
+      const i = text.indexOf(p + sel + q);
+      if (i >= 0) { at = i + p.length; break; }
+    }
+    if (at < 0) at = text.indexOf(sel);
+    if (at < 0) return null;
+    const [sN, sO] = where[at], [eN, eO] = where[at + sel.length - 1];
     const r = document.createRange();
-    try { r.setStart(sN, sO); r.setEnd(eN, eO); } catch (e) { return null; }
+    try { r.setStart(sN, sO); r.setEnd(eN, eO + 1); } catch (e) { return null; }
     return r;
   }
   const data = (() => { try { return JSON.parse(document.getElementById('annotations-data').textContent); } catch (e) { return {}; } })();
   document.querySelectorAll('.topic-article').forEach(article => {
     const a = data[article.dataset.topicId]; if (!a) return;
     const title = titleOf(article), topic = article.dataset.topicId;
-    (a.highlights || []).forEach(h => {
-      const r = findRange(article, h.selected_text, h.prefix_text); if (!r) return;
-      const ann = {id: h.id, kind: 'highlight', color: h.color, note: null, topic, title, selected: h.selected_text};
-      ann.spans = wrap(r, ann); anns.push(ann);
-    });
-    (a.inlineNotes || []).forEach(nn => {
-      const r = findRange(article, nn.selected_text, nn.prefix_text); if (!r) return;
-      const ann = {id: nn.id, kind: 'inline', color: null, note: nn.note_text, topic, title, selected: nn.selected_text};
-      ann.spans = wrap(r, ann); anns.push(ann);
+    const items = [];
+    (a.highlights || []).forEach(h => items.push([h,
+      {id: h.id, kind: 'highlight', color: h.color, note: null, topic, title, selected: h.selected_text}]));
+    (a.inlineNotes || []).forEach(nn => items.push([nn,
+      {id: nn.id, kind: 'inline', color: null, note: nn.note_text, topic, title, selected: nn.selected_text}]));
+    items.forEach(([h, ann]) => {
+      ann.spans = [];
+      const r = findRange(article, h.selected_text, h.prefix_text, h.suffix_text);   // located, then wrapped, one at a time
+      if (r) { try { ann.spans = wrap(r, ann); } catch (e) { ann.spans = []; } }
+      ann.orphan = !ann.spans.length;      // text changed since: listed in the panel, not lost
+      anns.push(ann);
     });
   });
 
@@ -233,13 +257,20 @@
     panelBody.innerHTML = anns.map((a, i) => `
       <button data-i="${i}" class="ann-item mb-2 block w-full rounded-lg border bg-background p-3 text-left hover:border-primary/40">
         <div class="flex items-center gap-2 text-xs text-muted-foreground">
-          ${a.kind === 'highlight' ? `<span class="h-3 w-3 rounded-full" style="background:${HL[a.color] || a.color}"></span>Highlight` :
+          ${a.kind === 'highlight' ? `<span class="h-3 w-3 rounded-full" style="background:${HL[a.color] || '#facc15'}"></span>Highlight` :
             `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.4 2.6a2 2 0 0 1 3 3L9 18l-4 1 1-4Z"></path></svg>Note`}
-          <span class="ml-auto truncate">${a.title}</span>
+          <span class="ml-auto truncate">${escapeHtml(a.title)}</span>
         </div>
+        ${a.orphan ? `<p class="mt-1 text-xs" style="color:var(--destructive,#dc2626)">Passage not found — the topic text has changed. <span class="ann-orphan-del underline" data-i="${i}" role="button" tabindex="0">Remove</span></p>` : ''}
         <p class="mt-1 line-clamp-2 text-sm ${a.kind === 'highlight' ? '' : 'italic text-muted-foreground'}">${escapeHtml(a.selected)}</p>
         ${a.note ? `<p class="mt-1 line-clamp-2 text-sm">${escapeHtml(a.note)}</p>` : ''}
       </button>`).join('');
+    panelBody.querySelectorAll('.ann-orphan-del').forEach(el => el.addEventListener('click', async ev => {
+      ev.stopPropagation();
+      const a = anns[+el.dataset.i]; if (!a) return;
+      await del((a.kind === 'highlight' ? '/api/highlights/' : '/api/inline-notes/') + a.id);
+      anns.splice(anns.indexOf(a), 1); renderPanel();
+    }));
     panelBody.querySelectorAll('.ann-item').forEach(el => el.addEventListener('click', () => {
       const a = anns[+el.dataset.i], sp = a.spans && a.spans[0];
       if (sp) { sp.scrollIntoView({behavior: 'smooth', block: 'center'});

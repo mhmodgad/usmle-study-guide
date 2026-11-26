@@ -71,7 +71,7 @@
   if (prof && pm) {
     prof.addEventListener('click', e => { e.stopPropagation(); closeAll(); pm.classList.toggle('hidden'); });
     pm.querySelectorAll('.pm-theme').forEach(b => b.addEventListener('click', () => setTheme(b.dataset.theme)));
-    document.getElementById('pm-notifications').addEventListener('click', () => { pm.classList.add('hidden'); openNotif(); });
+    document.getElementById('pm-notifications')?.addEventListener('click', () => { pm.classList.add('hidden'); openNotif(); });
   }
 
   // ---- notifications ----
@@ -148,11 +148,13 @@
       : '<p class="px-3 py-6 text-center text-sm text-muted-foreground">Your recent queries and opened topics will appear here.</p>';
     sdResults.querySelectorAll('.sd-recent').forEach(b => b.addEventListener('click', () => { sdInput.value = b.dataset.q; runSearch(); }));
   }
-  let st;
+  let st, searchSeq = 0;
   async function runSearch() {
     const q = sdInput.value.trim();
+    const my = ++searchSeq;
     if (!q) { renderRecents(); return; }
     const d = await (await fetch('/api/search?q=' + encodeURIComponent(q))).json();
+    if (my !== searchSeq) return;          // a newer search was started while this one ran
     sdResults.innerHTML = d.items.length
       ? d.items.map(i => `<a href="${i.href}" data-q="${esc(q)}" class="sd-hit block rounded-lg px-3 py-2 hover:bg-accent">
           <p class="text-sm font-medium">${esc(i.title)}</p>
