@@ -1,0 +1,186 @@
+{% extends "settings_layout.html" %}
+{% set settings_tab = 'backup' %}
+{% set page_title = 'Backup' %}
+{% block settings_body %}
+<div class="flex flex-col gap-6" id="bk">
+  <div>
+    <h2 class="text-lg font-semibold">Cloud backup</h2>
+    <p class="text-sm text-muted-foreground">Every change is saved on this computer the moment you make it. Cloud backup copies what you choose to Google Drive (or any <a class="text-primary hover:underline" href="https://rclone.org/overview/" target="_blank" rel="noopener">rclone remote</a>) in the background. If you're offline it simply waits. Files are stored unencrypted.</p>
+  </div>
+
+  <div id="bk-status" class="th-banner">Loading…</div>
+
+  <section class="th-card flex flex-col gap-3">
+    <label class="th-switch"><input type="checkbox" id="bk-enabled"> Back up automatically</label>
+    <p class="th-muted" id="bk-enabled-help">When this is off nothing leaves your computer. <b>Back up now</b> still works.</p>
+    <div class="flex flex-col gap-2">
+      <p class="text-sm font-medium">When</p>
+      <label class="flex items-center gap-2 text-sm"><input type="radio" name="schedule" value="auto"> Shortly after you make changes (at most every 10 minutes)</label>
+      <label class="flex items-center gap-2 text-sm"><input type="radio" name="schedule" value="interval"> Every <input type="number" min="1" max="168" id="bk-hours" class="th-input" style="width:4.5rem"> hours, if something changed</label>
+      <label class="flex items-center gap-2 text-sm"><input type="radio" name="schedule" value="manual"> Only when I press <b>Back up now</b></label>
+    </div>
+  </section>
+
+  <section class="th-card flex flex-col gap-3">
+    <div>
+      <p class="text-sm font-medium">What to back up</p>
+      <p class="th-muted">Untick anything you don't want in the cloud. The last three are large and can be rebuilt from your own copies, so they start unticked.</p>
+    </div>
+    <div class="th-cats" id="bk-cats"></div>
+  </section>
+
+  <section class="th-card flex flex-col gap-3">
+    <p class="text-sm font-medium">Where</p>
+    <div class="flex flex-wrap items-center gap-2">
+      <input id="bk-remote" class="th-input" style="flex:1;min-width:16rem" placeholder="tempu-drive:tempu-backup">
+      <button class="th-btn" id="bk-test" type="button">Test connection</button>
+    </div>
+    <p class="th-muted" id="bk-rclone-help"></p>
+    <details class="text-sm">
+      <summary class="cursor-pointer font-medium">Set up Google Drive (one time)</summary>
+      <ol class="mt-2 list-decimal pl-5 text-sm text-muted-foreground" style="display:grid;gap:.35rem">
+        <li>Install rclone: Linux/macOS <code>curl https://rclone.org/install.sh | sudo bash</code> · Windows <code>winget install Rclone.Rclone</code> (or run the setup script again).</li>
+        <li>In a terminal run <code>rclone config create tempu-drive drive scope=drive.file</code>. A browser opens; sign in to Google and allow access. <code>drive.file</code> lets rclone see only the files it creates.</li>
+        <li>Type <code>tempu-drive:tempu-backup</code> above, press <b>Test connection</b>, then <b>Save</b>.</li>
+      </ol>
+    </details>
+  </section>
+
+  <section class="th-card flex flex-col gap-3">
+    <p class="text-sm font-medium">Keep</p>
+    <div class="flex flex-wrap items-center gap-3 text-sm">
+      <label>the latest <input type="number" min="1" max="500" id="bk-keep-recent" class="th-input" style="width:4.5rem"> backups</label>
+      <label>+ one a day for <input type="number" min="0" max="365" id="bk-keep-daily" class="th-input" style="width:4.5rem"> days</label>
+      <label>+ one a month for <input type="number" min="0" max="120" id="bk-keep-monthly" class="th-input" style="width:4.5rem"> months</label>
+    </div>
+  </section>
+
+  <div class="th-actions">
+    <button class="th-btn primary" id="bk-save" type="button">Save</button>
+    <button class="th-btn" id="bk-run" type="button">Back up now</button>
+    <span class="th-muted" id="bk-msg"></span>
+  </div>
+
+  <section class="th-card flex flex-col gap-3">
+    <div class="flex items-center justify-between gap-2">
+      <p class="text-sm font-medium">Restore from the cloud</p>
+      <button class="th-btn" id="bk-list" type="button">Show backups</button>
+    </div>
+    <p class="th-muted">Pick a backup and what to bring back. Only the ticked kinds of data are replaced; everything else stays as it is. A copy of your current data is kept in <code>data/backup/</code> first.</p>
+    <div id="bk-snaps" class="flex flex-col gap-2"></div>
+  </section>
+
+  <section class="flex flex-col gap-2">
+    <p class="text-sm font-medium">Recent backup runs</p>
+    <div id="bk-log"></div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const H = window.TempuHistory, esc = H.esc, $ = id => document.getElementById(id);
+  let cfg, cats;
+  const sizeWord = {small: 'small', depends: 'size varies', large: 'large', 'very large': 'very large'};
+  async function load() {
+    const d = await (await fetch('/api/backup/config')).json();
+    cfg = d.config; cats = d.categories;
+    $('bk-enabled').checked = cfg.enabled;
+    document.querySelectorAll('input[name=schedule]').forEach(r => r.checked = r.value === cfg.schedule);
+    $('bk-hours').value = cfg.interval_hours;
+    $('bk-remote').value = cfg.remote;
+    $('bk-keep-recent').value = cfg.keep_recent; $('bk-keep-daily').value = cfg.keep_daily; $('bk-keep-monthly').value = cfg.keep_monthly;
+    $('bk-cats').innerHTML = cats.map(c => `<label class="th-cat"><input type="checkbox" data-cat="${c.key}" ${c.on ? 'checked' : ''}>
+      <span><span class="text-sm font-medium">${esc(c.label)}</span><br><span class="th-muted">${esc(c.description)}</span></span>
+      <span class="th-size">${esc(sizeWord[c.size] || c.size)}</span></label>`).join('');
+    $('bk-rclone-help').textContent = d.rclone ? 'rclone is installed.' : 'rclone was not found on this computer — see the setup steps below.';
+    status(); log();
+  }
+  function collect() {
+    const categories = {};
+    document.querySelectorAll('[data-cat]').forEach(i => categories[i.dataset.cat] = i.checked);
+    return {enabled: $('bk-enabled').checked, schedule: (document.querySelector('input[name=schedule]:checked') || {}).value || 'auto',
+      interval_hours: +$('bk-hours').value || 6, remote: $('bk-remote').value.trim(), categories,
+      keep_recent: +$('bk-keep-recent').value || 20, keep_daily: +$('bk-keep-daily').value || 0, keep_monthly: +$('bk-keep-monthly').value || 0};
+  }
+  async function save() {
+    const body = collect();
+    if (body.enabled && !body.remote) { $('bk-msg').textContent = 'Choose where to back up first.'; return false; }
+    const r = await fetch('/api/backup/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    $('bk-msg').textContent = r.ok ? 'Saved.' : 'Could not save.';
+    status();
+    return r.ok;
+  }
+  async function status() {
+    const s = await (await fetch('/api/backup/status')).json();
+    const el = $('bk-status');
+    el.className = 'th-banner' + (s.state === 'error' ? ' err' : '');
+    let t = s.text;
+    if (s.last_ok) t += ' · last backup ' + H.when(s.last_ok);
+    if (s.files_waiting) t += ` · ${s.files_waiting} file(s) not uploaded yet`;
+    if (s.last_error) t += ' · ' + s.last_error;
+    if (s.running && s.running.step) t = s.running.step;
+    el.textContent = t;
+    if (s.state === 'running' || (s.running && s.running.running)) setTimeout(() => { status(); log(); }, 2000);
+  }
+  async function log() {
+    const rows = await (await fetch('/api/backup/log')).json();
+    $('bk-log').innerHTML = rows.length ? rows.map(r => `<div class="th-act-row"><span class="th-kind">${r.ok ? 'ok' : (r.finished_at ? 'failed' : 'running')}</span>
+      <div class="th-act-main"><div class="th-act-label">${esc(r.snapshot || r.error || '')}</div>
+      <div class="th-muted">${esc(H.when(r.started_at))}${r.ok ? ` · ${r.blobs_sent} file(s) · ${(r.bytes_sent / 1048576).toFixed(1)} MB` : ''}</div></div></div>`).join('')
+      : '<p class="th-muted">No backups yet.</p>';
+  }
+  $('bk-save').addEventListener('click', save);
+  $('bk-test').addEventListener('click', async () => {
+    $('bk-msg').textContent = 'Testing…';
+    const r = await fetch('/api/backup/test', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({remote: $('bk-remote').value.trim()})});
+    const d = await r.json();
+    $('bk-msg').textContent = d.ok ? d.message : d.error;
+  });
+  $('bk-run').addEventListener('click', async () => {
+    if (!(await save())) return;
+    await fetch('/api/backup/run', {method: 'POST'});
+    $('bk-msg').textContent = 'Backing up…';
+    setTimeout(() => { status(); log(); }, 800);
+  });
+  $('bk-list').addEventListener('click', async () => {
+    const box = $('bk-snaps');
+    box.innerHTML = '<p class="th-muted">Loading…</p>';
+    const d = await (await fetch('/api/backup/snapshots')).json();
+    if (!d.ok) { box.innerHTML = `<p class="th-banner err">${esc(d.error)}</p>`; return; }
+    if (!d.snapshots.length) { box.innerHTML = '<p class="th-muted">No backups yet.</p>'; return; }
+    box.innerHTML = d.snapshots.map((s, i) => {
+      const t = s.name.slice(5, 21), iso = `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}T${t.slice(9, 11)}:${t.slice(11, 13)}:${t.slice(13, 15)}Z`;
+      const inc = s.categories || null;
+      return `<div class="th-card" data-snap="${esc(s.name)}"><div class="flex items-center justify-between gap-2">
+        <div><b>${esc(H.when(iso))}</b> <span class="th-muted">${s.bytes ? (s.bytes / 1048576).toFixed(1) + ' MB' : ''}</span></div>
+        <button class="th-btn primary" data-go>Restore…</button></div>
+        <div class="th-cats mt-2" data-pick hidden>${cats.map(c => {
+          const has = !inc || inc.includes(c.key) || ['base', 'source', 'media'].includes(c.key);
+          return `<label class="th-cat"><input type="checkbox" value="${c.key}" ${has && !['base', 'source', 'media'].includes(c.key) ? 'checked' : ''} ${has ? '' : 'disabled'}>
+            <span class="text-sm">${esc(c.label)}${has ? '' : ' <span class="th-muted">(not in this backup)</span>'}</span></label>`; }).join('')}
+          <div class="th-actions"><button class="th-btn primary" data-confirm>Restore the ticked data</button></div></div></div>`;
+    }).join('');
+    box.querySelectorAll('[data-snap]').forEach(card => {
+      card.querySelector('[data-go]').addEventListener('click', () => card.querySelector('[data-pick]').hidden = false);
+      card.querySelector('[data-confirm]').addEventListener('click', async () => {
+        const categories = [...card.querySelectorAll('[data-pick] input:checked')].map(i => i.value);
+        if (!categories.length) return;
+        if (!confirm('Replace your current ' + categories.length + ' kind(s) of data with this backup? A copy of what you have now is kept in data/backup/.')) return;
+        await fetch('/api/backup/restore', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: card.dataset.snap, categories})});
+        $('bk-status').textContent = 'Restoring…';
+        const poll = async () => {
+          const r = await (await fetch('/api/backup/restore/result')).json();
+          if (r.ok === undefined) { status(); return setTimeout(poll, 1500); }
+          if (r.ok) H.reloadWith('Restored ' + r.categories.length + ' kind(s) of data from the backup');
+          else { $('bk-status').className = 'th-banner err'; $('bk-status').textContent = 'Restore failed: ' + r.error; }
+        };
+        setTimeout(poll, 1000);
+      });
+    });
+  });
+  $('bk-enabled').addEventListener('change', () => { if ($('bk-enabled').checked && !$('bk-remote').value.trim()) $('bk-remote').focus(); });
+  load();
+})();
+</script>
+{% endblock %}

@@ -245,6 +245,9 @@ def replay(conn):
             continue
         if o["deleted"] == 1:
             continue    # stays in the trash (its payload restores it)
+        ptab = {"chapter": "libraries", "section": "chapters", "topic": "sections"}[k]
+        if not conn.execute(f"SELECT 1 FROM {ptab} WHERE id=?", (o["parent_id"],)).fetchone():
+            continue    # its parent is in the trash; restoring the parent brings it back
         if k == "chapter":
             conn.execute("INSERT OR IGNORE INTO chapters(id,library_id,title,icon_path,sort_order) VALUES(?,?,?,?,?)",
                          (o["id"], o["parent_id"], o["title"], o["icon_path"], o["sort_order"] or 0))
@@ -264,6 +267,16 @@ def replay(conn):
         t, pcol = _table(k)
         if not _row(conn, k, o["id"]):
             continue
+        if o["parent_id"] and pcol:
+            ptab = {"chapter": "libraries", "section": "chapters", "topic": "sections"}[k]
+            if not conn.execute(f"SELECT 1 FROM {ptab} WHERE id=?", (o["parent_id"],)).fetchone():
+                # moved into something that is now in the trash: it goes with it
+                # (the trashed parent's payload holds it for restore)
+                acc = {}
+                _collect(conn, k, o["id"], acc)
+                _delete_rows(conn, acc)
+                n += 1
+                continue
         sets, vals = [], []
         if o["parent_id"] and pcol:
             sets.append(f"{pcol}=?"); vals.append(o["parent_id"])

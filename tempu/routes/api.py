@@ -506,6 +506,8 @@ def xref_lookup(topic_id):
 import os as _os
 from flask import current_app as _app
 from .. import sanitize as _san
+from .. import history as _hist
+from .. import blobs as _blobs
 
 _IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "avif", "bmp"}
 
@@ -544,83 +546,132 @@ def topic_content_get(topic_id):
         "title": (e["title"] if e and e["title"] else t["title"]),
         "edited": bool(e),
         "edited_at": e["updated_at"] if e else None,
-        "history": g.db.execute("SELECT COUNT(*) FROM topic_edit_history WHERE topic_id=?",
-                                (topic_id,)).fetchone()[0],
+        "history": len(_hist.topic_versions(g.db, topic_id)),
+        "base_changed": bool(e and e["base_version"] is not None
+                             and t["document_version"] is not None
+                             and e["base_version"] != t["document_version"]),
     })
+
+
+def _topic_title(t, e=None):
+    if e is None:
+        e = g.db.execute("SELECT title FROM topic_edits WHERE topic_id=?", (t["id"],)).fetchone()
+    return (e["title"] if e and e["title"] else None) or t["title"] or "Untitled topic"
 
 
 @bp.route("/topics/<topic_id>/content", methods=["PUT", "POST"])
 def topic_content_save(topic_id):
+    """Autosave from the editor. Saves within 2 minutes of each other (same
+    editing session) are one history entry; ``checkpoint`` starts a new one."""
     t = _topic_or_404(topic_id)
     d = request.get_json(force=True) or {}
     html = _san.clean_html(d.get("html") or "")
     title = (d.get("title") or "").strip() or None
     if title == t["title"]:
         title = None
-    cur = g.db.execute("SELECT * FROM topic_edits WHERE topic_id=?", (topic_id,)).fetchone()
     now = _now()
-    # keep a restorable copy of what was there before this editing session
-    if d.get("checkpoint"):
-        g.db.execute("INSERT INTO topic_edit_history(topic_id,html,title,saved_at) VALUES(?,?,?,?)",
-                     (topic_id, cur["html"] if cur else t["document_html"],
-                      cur["title"] if cur else None, now))
-        g.db.execute(
-            "DELETE FROM topic_edit_history WHERE topic_id=? AND id NOT IN "
-            "(SELECT id FROM topic_edit_history WHERE topic_id=? ORDER BY id DESC LIMIT 30)",
-            (topic_id, topic_id))
     plain = _san.plain_text(html)
-    g.db.execute(
-        "INSERT INTO topic_edits(topic_id,html,title,plain_text,base_version,updated_at) "
-        "VALUES(?,?,?,?,?,?) ON CONFLICT(topic_id) DO UPDATE SET "
-        "html=excluded.html, title=excluded.title, plain_text=excluded.plain_text, "
-        "updated_at=excluded.updated_at",
-        (topic_id, html, title, plain, t["document_version"], now))
-    _reindex_topic(topic_id, title or t["title"], plain)
-    g.db.commit()
-    return jsonify({"ok": True, "updated_at": now})
+    label = "Edited '%s'" % (title or _topic_title(t))
+    with _hist.Change(g.db, label, kind="edit", scope=("topic", topic_id),
+                      session=d.get("session"), coalesce=not d.get("checkpoint")) as ch:
+        g.db.execute(
+            "INSERT INTO topic_edits(topic_id,html,title,plain_text,base_version,updated_at) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(topic_id) DO UPDATE SET "
+            "html=excluded.html, title=excluded.title, plain_text=excluded.plain_text, "
+            "updated_at=excluded.updated_at",
+            (topic_id, html, title, plain, t["document_version"], now))
+        _reindex_topic(topic_id, title or t["title"], plain)
+    return jsonify({"ok": True, "updated_at": now, "changeset": ch.info()})
 
 
 @bp.route("/topics/<topic_id>/content", methods=["DELETE"])
 def topic_content_restore(topic_id):
-    """Drop the user's edits and go back to the original document."""
+    """Drop the user's edits and go back to the original document (undoable)."""
     t = _topic_or_404(topic_id)
-    cur = g.db.execute("SELECT * FROM topic_edits WHERE topic_id=?", (topic_id,)).fetchone()
-    if cur:
-        g.db.execute("INSERT INTO topic_edit_history(topic_id,html,title,saved_at) VALUES(?,?,?,?)",
-                     (topic_id, cur["html"], cur["title"], _now()))
+    with _hist.Change(g.db, "Restored original of '%s'" % t["title"], kind="edit",
+                      scope=("topic", topic_id)) as ch:
         g.db.execute("DELETE FROM topic_edits WHERE topic_id=?", (topic_id,))
         _reindex_topic(topic_id, t["title"], t["plain_text"])
-        g.db.commit()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "changeset": ch.info()})
 
 
 @bp.route("/topics/<topic_id>/history", methods=["GET"])
 def topic_history(topic_id):
-    rows = g.db.execute("SELECT id, title, saved_at, length(html) size FROM topic_edit_history "
-                        "WHERE topic_id=? ORDER BY id DESC", (topic_id,)).fetchall()
-    return jsonify([dict(r) for r in rows])
+    """Saved versions of this topic, newest first; the original is always last."""
+    _topic_or_404(topic_id)
+    out = _hist.topic_versions(g.db, topic_id)
+    if not out or not out[-1]["original"]:
+        out.append({"id": 0, "changeset": None, "label": "Original", "saved_at": None, "original": True,
+                    "title": None, "size": 0, "current": not g.db.execute(
+                        "SELECT 1 FROM topic_edits WHERE topic_id=?", (topic_id,)).fetchone(),
+                    "undone": False})
+    return jsonify(out)
+
+
+def _version_html(topic_id, hid):
+    """(html, title) of a saved version; hid 0 = the original."""
+    t = _topic_or_404(topic_id)
+    if hid == 0:
+        return t["document_html"], None
+    rev, after = _hist.revision_state(g.db, hid)
+    if not rev or rev["tbl"] != "topic_edits" or json.loads(rev["pk"]) != [topic_id]:
+        abort(404)
+    if after is None:
+        return t["document_html"], None
+    return after.get("html") or "", after.get("title")
+
+
+@bp.route("/topics/<topic_id>/history/<int:hid>", methods=["GET"])
+def topic_history_version(topic_id, hid):
+    """One version's HTML plus a word-level comparison with the current text."""
+    html, title = _version_html(topic_id, hid)
+    t = _topic_or_404(topic_id)
+    e = g.db.execute("SELECT html FROM topic_edits WHERE topic_id=?", (topic_id,)).fetchone()
+    cur_html = e["html"] if e else t["document_html"]
+    return jsonify({"id": hid, "html": html, "title": title,
+                    "diff_html": _diff_words(_san.plain_text(cur_html or ""), _san.plain_text(html or ""))})
 
 
 @bp.route("/topics/<topic_id>/history/<int:hid>/restore", methods=["POST"])
 def topic_history_restore(topic_id, hid):
     t = _topic_or_404(topic_id)
-    h = g.db.execute("SELECT * FROM topic_edit_history WHERE id=? AND topic_id=?",
-                     (hid, topic_id)).fetchone()
-    if not h:
-        abort(404)
-    plain = _san.plain_text(h["html"])
-    g.db.execute(
-        "INSERT INTO topic_edits(topic_id,html,title,plain_text,base_version,updated_at) "
-        "VALUES(?,?,?,?,?,?) ON CONFLICT(topic_id) DO UPDATE SET html=excluded.html, "
-        "title=excluded.title, plain_text=excluded.plain_text, updated_at=excluded.updated_at",
-        (topic_id, h["html"], h["title"], plain, t["document_version"], _now()))
-    _reindex_topic(topic_id, h["title"] or t["title"], plain)
-    g.db.commit()
-    return jsonify({"ok": True})
+    html, title = _version_html(topic_id, hid)
+    if hid == 0:
+        return topic_content_restore(topic_id)
+    plain = _san.plain_text(html)
+    with _hist.Change(g.db, "Restored an earlier version of '%s'" % (title or t["title"]), kind="edit",
+                      scope=("topic", topic_id)) as ch:
+        g.db.execute(
+            "INSERT INTO topic_edits(topic_id,html,title,plain_text,base_version,updated_at) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(topic_id) DO UPDATE SET html=excluded.html, "
+            "title=excluded.title, plain_text=excluded.plain_text, updated_at=excluded.updated_at",
+            (topic_id, html, title, plain, t["document_version"], _now()))
+        _reindex_topic(topic_id, title or t["title"], plain)
+    return jsonify({"ok": True, "changeset": ch.info()})
+
+
+def _diff_words(old, new):
+    """HTML showing how ``new`` (the chosen version) differs from ``old`` (current)."""
+    import difflib
+    import html as H
+    a, b = old.split(), new.split()
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "equal":
+            seg = a[i1:i2]
+            if len(seg) > 40:   # keep long unchanged runs short
+                seg = seg[:15] + ["…"] + seg[-15:]
+            out.append(H.escape(" ".join(seg)))
+        if op in ("delete", "replace"):
+            out.append("<del>%s</del>" % H.escape(" ".join(a[i1:i2])))
+        if op in ("insert", "replace"):
+            out.append("<ins>%s</ins>" % H.escape(" ".join(b[j1:j2])))
+    return " ".join(out)
 
 
 @bp.route("/uploads", methods=["POST"])
 def upload_image():
+    """Save an image you add (editor, icons) into the blob store: data/blobs/<sha>."""
     f = request.files.get("file")
     if not f or not f.filename:
         return jsonify({"error": "no file"}), 400
@@ -630,11 +681,8 @@ def upload_image():
         ext = {"jpeg": "jpg"}.get(mt, mt)
         if ext not in _IMG_EXT:
             return jsonify({"error": "only image files can be added"}), 400
-    folder = _app.config["UPLOADS_DIR"]
-    _os.makedirs(folder, exist_ok=True)
-    name = f"{_uid()}.{ext}"
-    f.save(_os.path.join(folder, name))
-    return jsonify({"url": f"/uploads/{name}", "name": f.filename})
+    url = _blobs.save_upload(g.db, _app.config["DATA_DIR"], f.stream, ext, original_name=f.filename)
+    return jsonify({"url": url, "name": f.filename})
 
 
 # ------------------------------------------------------------- section reading state
@@ -674,6 +722,27 @@ def _kind(kind):
     return kind
 
 
+_KIND_WORD = {"library": "library", "chapter": "chapter", "section": "section", "topic": "topic"}
+
+
+def _name(kind, item_id):
+    t, _ = _st.KINDS[kind]
+    if kind == "topic":
+        r = g.db.execute("SELECT COALESCE(e.title,t.title) title FROM topics t LEFT JOIN topic_edits e "
+                         "ON e.topic_id=t.id WHERE t.id=?", (item_id,)).fetchone()
+    else:
+        r = g.db.execute(f"SELECT title FROM {t} WHERE id=?", (item_id,)).fetchone()
+    if not r:
+        o = g.db.execute("SELECT title FROM struct_overrides WHERE kind=? AND id=?", (kind, item_id)).fetchone()
+        return (o["title"] if o and o["title"] else None) or "untitled"
+    return r["title"] or "untitled"
+
+
+def _parent_name(kind, parent_id):
+    pk = {"chapter": "library", "section": "chapter", "topic": "section"}.get(kind)
+    return _name(pk, parent_id) if pk and parent_id else ""
+
+
 @bp.route("/structure/<kind>", methods=["POST"])
 def structure_create(kind):
     _kind(kind)
@@ -683,13 +752,19 @@ def structure_create(kind):
     parent = d.get("parent_id")
     if not parent:
         return jsonify({"error": "parent_id required"}), 400
-    new_id = _st.create(g.db, kind, parent, d.get("title"), d.get("after_id"), d.get("icon_path"))
-    g.db.commit()
-    out = {"ok": True, "id": new_id}
+    title = (d.get("title") or "").strip() or "New " + kind
+    with _hist.Change(g.db, "Added %s '%s' to '%s'" % (kind, title, _parent_name(kind, parent)),
+                      kind="structure", scope=(kind, None)) as ch:
+        new_id = _st.create(g.db, kind, parent, d.get("title"), d.get("after_id"), d.get("icon_path"))
+        ch.scope_id = new_id
+    if ch.id:
+        g.db.execute("UPDATE changesets SET scope_id=? WHERE id=?", (new_id, ch.id))
+        g.db.commit()
+    out = {"ok": True, "id": new_id, "changeset": ch.info()}
     if kind == "section":
-        ch = g.db.execute("SELECT library_id FROM chapters WHERE id=?", (parent,)).fetchone()
-        if ch:
-            out["url"] = "/libraries/%s/chapters/%s/sections/%s" % (ch["library_id"], parent, new_id)
+        chp = g.db.execute("SELECT library_id FROM chapters WHERE id=?", (parent,)).fetchone()
+        if chp:
+            out["url"] = "/libraries/%s/chapters/%s/sections/%s" % (chp["library_id"], parent, new_id)
     if kind == "topic":
         out["url"] = "/sections/%s#topic-%s" % (parent, new_id)
     return jsonify(out)
@@ -699,18 +774,44 @@ def structure_create(kind):
 def structure_update(kind, item_id):
     _kind(kind)
     d = request.get_json(force=True) or {}
-    if "title" in d and not _st.rename(g.db, kind, item_id, d["title"]):
-        return jsonify({"error": "not found or empty title"}), 400
+    old = _name(kind, item_id)
+    parts = []
+    if "title" in d:
+        parts.append("Renamed %s '%s' to '%s'" % (kind, old, (d["title"] or "").strip()))
     if "icon_path" in d:
-        _st.set_icon(g.db, kind, item_id, d["icon_path"] or None)
-    if kind != "library" and ("parent_id" in d or "order" in d or "index" in d):
+        parts.append("Changed the icon of '%s'" % old)
+    moving = kind != "library" and ("parent_id" in d or "order" in d or "index" in d)
+    if moving:
         t, pcol = _st.KINDS[kind]
         row = g.db.execute(f"SELECT {pcol} p FROM {t} WHERE id=?", (item_id,)).fetchone()
         if not row:
             abort(404)
-        _st.move(g.db, kind, item_id, d.get("parent_id") or row["p"], d.get("order"), d.get("index"))
-    g.db.commit()
-    return jsonify({"ok": True})
+        dest = d.get("parent_id") or row["p"]
+        parts.append(("Moved %s '%s' to '%s'" % (kind, old, _parent_name(kind, dest)))
+                     if dest != row["p"] else "Reordered '%s'" % old)
+    label = "; ".join(parts) or "Changed '%s'" % old
+    with _hist.Change(g.db, label, kind="structure", scope=(kind, item_id)) as ch:
+        if "title" in d and not _st.rename(g.db, kind, item_id, d["title"]):
+            raise _Abort(jsonify({"error": "not found or empty title"}), 400)
+        if "icon_path" in d:
+            _st.set_icon(g.db, kind, item_id, d["icon_path"] or None)
+        if moving:
+            _st.move(g.db, kind, item_id, dest, d.get("order"), d.get("index"))
+        if kind == "topic" and ("title" in d or moving):
+            _hist.reindex_topics(g.db, [item_id])
+    return jsonify({"ok": True, "changeset": ch.info()})
+
+
+class _Abort(Exception):
+    """Leave a Change block (rolling it back) and answer with this response."""
+    def __init__(self, resp, code):
+        super().__init__("abort")
+        self.resp, self.code = resp, code
+
+
+@bp.errorhandler(_Abort)
+def _on_abort(e):
+    return e.resp, e.code
 
 
 @bp.route("/structure/<kind>/<item_id>", methods=["DELETE"])
@@ -718,9 +819,10 @@ def structure_delete(kind, item_id):
     _kind(kind)
     if kind == "library":
         return jsonify({"error": "libraries can't be deleted"}), 400
-    ok = _st.delete(g.db, kind, item_id)
-    g.db.commit()
-    return jsonify({"ok": ok})
+    with _hist.Change(g.db, "Deleted %s '%s'" % (kind, _name(kind, item_id)), kind="structure",
+                      scope=(kind, item_id)) as ch:
+        ok = _st.delete(g.db, kind, item_id)
+    return jsonify({"ok": ok, "changeset": ch.info()})
 
 
 @bp.route("/structure/trash", methods=["GET"])
@@ -731,17 +833,24 @@ def structure_trash():
 @bp.route("/structure/<kind>/<item_id>/restore", methods=["POST"])
 def structure_restore(kind, item_id):
     _kind(kind)
-    ok = _st.restore(g.db, kind, item_id)
-    g.db.commit()
-    return jsonify({"ok": ok})
+    with _hist.Change(g.db, "Restored %s '%s' from the trash" % (kind, _name(kind, item_id)),
+                      kind="structure", scope=(kind, item_id)) as ch:
+        ok = _st.restore(g.db, kind, item_id)
+        if ok:
+            ids = [r[0] for r in g.db.execute("SELECT id FROM topics WHERE id=? OR section_id=? OR section_id IN "
+                                              "(SELECT id FROM sections WHERE chapter_id=?)",
+                                              (item_id, item_id, item_id))]
+            _hist.reindex_topics(g.db, ids)
+    return jsonify({"ok": ok, "changeset": ch.info()})
 
 
 @bp.route("/structure/<kind>/<item_id>/purge", methods=["POST"])
 def structure_purge(kind, item_id):
     _kind(kind)
-    ok = _st.purge(g.db, kind, item_id)
-    g.db.commit()
-    return jsonify({"ok": ok})
+    with _hist.Change(g.db, "Deleted %s '%s' forever (still in Activity)" % (kind, _name(kind, item_id)),
+                      kind="structure", scope=(kind, item_id)) as ch:
+        ok = _st.purge(g.db, kind, item_id)
+    return jsonify({"ok": ok, "changeset": ch.info()})
 
 
 @bp.route("/structure/tree/<library_id>", methods=["GET"])
@@ -790,8 +899,7 @@ def structure_icons():
                     add(f"/assets/{sub}/{fn}", "Library icons")
     for r in g.db.execute("SELECT icon_path FROM chapters UNION SELECT icon_path FROM sections"):
         add(S.icon_web_path(r[0]), "In use")
-    up = _app.config["UPLOADS_DIR"]
-    for r in g.db.execute("SELECT DISTINCT icon_path FROM struct_overrides WHERE icon_path LIKE '/uploads/%'"):
-        if _os.path.isfile(_os.path.join(up, r[0].rsplit("/", 1)[-1])):
-            add(r[0], "Your uploads")
+    for r in g.db.execute("SELECT DISTINCT icon_path FROM struct_overrides WHERE icon_path LIKE '/blobs/%' "
+                          "OR icon_path LIKE '/uploads/%'"):
+        add(r[0], "Your uploads")
     return jsonify(out)

@@ -47,20 +47,22 @@ def create_app(db_path=None, assets_dir=None):
                 template_folder=os.path.join(PROJECT, "templates"),
                 static_folder=os.path.join(PROJECT, "static"),
                 static_url_path="/static")
-    app.config["DB_PATH"] = db_path or dbmod.DEFAULT_DB
+    user_db, _base_db, data_dir = dbmod.paths(db_path)
+    app.config["DB_PATH"] = user_db               # data/user.db (data/base.db is attached to it)
+    app.config["DATA_DIR"] = data_dir
     app.config["ASSETS_DIR"] = assets_dir or DEFAULT_ASSETS
     app.config["JSON_SORT_KEYS"] = False
-    app.config["UPLOADS_DIR"] = os.environ.get(
-        "TEMPU_UPLOADS", os.path.join(os.path.dirname(os.path.abspath(app.config["DB_PATH"])), "uploads"))
+    # images added before the blob store existed (kept after the upgrade as uploads.migrated)
+    app.config["UPLOADS_DIR"] = os.environ.get("TEMPU_UPLOADS", os.path.join(data_dir, "uploads"))
     app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 
-    # one-time upgrades of an existing database (safe, idempotent)
+    # one-time upgrade of an old single-file database + start-up checks (safe, idempotent)
+    from . import migrate
     try:
-        _c = dbmod.connect(app.config["DB_PATH"])
-        dbmod.ensure_user_tables(_c)
-        _c.close()
+        migrate.ensure(data_dir)
     except Exception as e:  # noqa: BLE001
-        print("  ! could not prepare user tables:", e)
+        print("  ! could not prepare your data:", e)
+        raise
     if not os.environ.get("TEMPU_SKIP_RERENDER"):
         from . import loader as _loader
         _loader.ensure_render_current(app.config["DB_PATH"])
@@ -134,15 +136,32 @@ def create_app(db_path=None, assets_dir=None):
         directory, fname = os.path.split(full)
         return send_from_directory(directory, fname, max_age=86400)
 
-    # images the user added with the content editor (data/uploads, gitignored)
+    # files you added (editor images, icons): data/blobs/<sha[:2]>/<sha>.<ext>.
+    # The name is the content's hash, so the browser may cache it forever.
+    from . import blobs as blobmod
+
+    @app.route("/blobs/<name>")
+    def blob(name):
+        m = blobmod.NAME_RE.match(name)
+        if not m:
+            abort(404)
+        full = blobmod.path_for(app.config["DATA_DIR"], m.group(1), m.group(2))
+        if not os.path.isfile(full):
+            abort(404)
+        resp = send_from_directory(os.path.dirname(full), name, max_age=31536000)
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
+    # images added before the upgrade, at their old /uploads/ address
     @app.route("/uploads/<path:relpath>")
     def uploads(relpath):
-        base = os.path.normpath(app.config["UPLOADS_DIR"])
-        full = os.path.normpath(os.path.join(base, relpath))
-        if not full.startswith(base + os.sep) or not os.path.isfile(full):
-            abort(404)
-        directory, fname = os.path.split(full)
-        return send_from_directory(directory, fname, max_age=86400)
+        for folder in (app.config["UPLOADS_DIR"], app.config["UPLOADS_DIR"] + ".migrated"):
+            base = os.path.normpath(folder)
+            full = os.path.normpath(os.path.join(base, relpath))
+            if full.startswith(base + os.sep) and os.path.isfile(full):
+                directory, fname = os.path.split(full)
+                return send_from_directory(directory, fname, max_age=86400)
+        abort(404)
 
     # browser tab icon: your own logo from the assets folder if present,
     # otherwise a neutral built-in icon (branding is not shipped in the repo)
@@ -172,8 +191,22 @@ def create_app(db_path=None, assets_dir=None):
 
     from .routes.pages import bp as pages_bp
     from .routes.api import bp as api_bp
+    from .routes.history_api import bp as history_bp
+    from .routes.backup_api import bp as backup_bp
     app.register_blueprint(pages_bp)
     app.register_blueprint(api_bp)
+    app.register_blueprint(history_bp)
+    app.register_blueprint(backup_bp)
+
+    # background cloud backup (does nothing until you turn it on in Settings -> Backup).
+    # Started by the first request, so only the process that serves pages runs it
+    # (not the file-watcher parent of the debug reloader, not scripts importing the app).
+    @app.before_request
+    def _start_backup_worker():
+        if not app.config.get("_backup_worker") and not os.environ.get("TEMPU_NO_BACKUP_WORKER"):
+            app.config["_backup_worker"] = True
+            from . import backup
+            backup.start_worker(app.config["DB_PATH"])
 
     return app
 

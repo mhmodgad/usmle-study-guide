@@ -3,13 +3,19 @@ __pycache__/
 *.pyc
 .DS_Store
 
-# Built database (large; rebuildable from content)
+# Your data: base.db (rebuildable content), user.db (your changes + study state),
+# and the old single-file tempu.db kept after the upgrade
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/*.db.pre-migration
+data/*.migrating*
 
-# images you add with the in-app content editor
+# files you add with the in-app editor (content-addressed) + local backup copies
+data/blobs/
+data/backup/
 data/uploads/
+data/uploads.migrated/
 # small browser-tab icon generated from your logo at runtime
 data/app-icon-*.png
 

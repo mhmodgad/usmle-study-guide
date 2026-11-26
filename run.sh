@@ -10,8 +10,8 @@ if [ ! -x "$PY" ]; then
   echo "No virtual environment found. Run ./setup.sh first."
   exit 1
 fi
-if [ ! -f data/tempu.db ]; then
-  echo "No database found. Run ./setup.sh first (or copy data/tempu.db into the data folder)."
+if [ ! -f data/base.db ] && [ ! -f data/tempu.db ]; then
+  echo "No database found. Run ./setup.sh first (or copy your data/ folder into place)."
   exit 1
 fi
 

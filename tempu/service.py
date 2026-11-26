@@ -70,7 +70,9 @@ def topic_rows(section_id):
         "       t.plain_text, t.has_cards, t.updated_at, "
         "       COALESCE(e.html, t.document_html) AS document_html, "
         "       COALESCE(e.title, t.title) AS title, t.title AS original_title, "
-        "       e.updated_at AS edited_at "
+        "       e.updated_at AS edited_at, "
+        "       (e.base_version IS NOT NULL AND t.document_version IS NOT NULL "
+        "        AND e.base_version <> t.document_version) AS base_changed "
         "FROM topics t LEFT JOIN topic_edits e ON e.topic_id=t.id "
         "WHERE t.section_id=? ORDER BY t.sort_order", (section_id,)
     ).fetchall()
@@ -201,7 +203,7 @@ def icon_web_path(icon_path):
     """iconPath 'preset/icons/medical/<x>.webp' -> local asset URL."""
     if not icon_path:
         return None
-    if icon_path.startswith(("/uploads/", "/assets/", "http://", "https://")):
+    if icon_path.startswith(("/blobs/", "/uploads/", "/assets/", "http://", "https://")):
         return icon_path
     if icon_path.startswith("preset/icons/medical/"):
         return "/assets/icons/medical/" + icon_path.split("/")[-1]

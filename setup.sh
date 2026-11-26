@@ -24,15 +24,25 @@ if [ -d local/css ] && [ ! -f static/css/app.css ]; then
   "$PYBIN" -m tempu.build_css
 fi
 
-if [ -f data/tempu.db ]; then
-  echo "==> Database already present (data/tempu.db) - skipping build"
+if [ -f data/base.db ] || [ -f data/tempu.db ]; then
+  # an old data/tempu.db is upgraded to base.db + user.db automatically on first start
+  echo "==> Database already present - skipping build"
 elif [ -d local/content ]; then
-  echo "==> Building database from local/content"
+  echo "==> Building the library (data/base.db) from local/content"
   "$PYBIN" -m tempu.loader
 else
-  echo "==> [!] No data/tempu.db and no local/content found."
+  echo "==> [!] No database and no local/content found."
   echo "    Put your content under local/content/ (see local/README.md),"
-  echo "    or copy a prebuilt data/tempu.db into the data folder, then re-run."
+  echo "    or copy a prebuilt data/ folder (base.db + user.db) into place, then re-run."
+fi
+
+if command -v rclone >/dev/null 2>&1; then
+  echo "==> rclone found - cloud backup can be set up in Settings > Backup"
+else
+  echo "==> rclone not installed - cloud backup (optional) needs it."
+  echo "    Install:  curl https://rclone.org/install.sh | sudo bash"
+  echo "    Then:     rclone config create tempu-drive drive scope=drive.file"
+  echo "    and turn backup on in Settings > Backup. The app works fine without it."
 fi
 
 if command -v git >/dev/null 2>&1; then

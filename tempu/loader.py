@@ -3,7 +3,8 @@
 Reads the library structure, every section's topic documents, all STEP 2CK
 flashcards, the official + personal collections, and the captured user state,
 renders content to HTML with the verified BlockNote / Lexical renderers, and
-writes everything into data/tempu.db.
+writes the content into data/base.db (your own data lives in data/user.db and
+is never reset unless you pass --wipe-user).
 
 Usage:
     python -m tempu.loader [--content PATH] [--db PATH] [--step1] [--reset]
@@ -19,6 +20,7 @@ import re
 import sys
 
 from . import db as dbmod
+from . import migrate as migratemod
 from . import structure as structmod
 from .render import bn_render, card_render
 
@@ -220,9 +222,9 @@ def rerender_documents(conn, content=None, quiet=False):
 def ensure_render_current(db_path=None, content=None):
     """Re-render stored topic HTML once after a renderer upgrade."""
     try:
-        conn = dbmod.connect(db_path)
+        conn = dbmod.connect(db_path, journal=False)
         try:
-            row = conn.execute("SELECT value FROM meta WHERE key='render_version'").fetchone()
+            row = conn.execute("SELECT value FROM base.meta WHERE key='render_version'").fetchone()
         except Exception:  # noqa: BLE001 - no meta table yet (DB not built)
             conn.close()
             return False
@@ -586,10 +588,11 @@ def build_search(conn):
         print("  ! FTS5 unavailable; search will use LIKE fallback")
         return
     conn.execute("DELETE FROM search_fts")
-    rows = conn.execute(
-        "SELECT t.id,t.title,t.plain_text,s.chapter_id,t.section_id,c.library_id "
+    rows = conn.execute(   # your edited title/text wins over the original
+        "SELECT t.id, COALESCE(e.title,t.title) title, COALESCE(e.plain_text,t.plain_text) plain_text, "
+        "s.chapter_id,t.section_id,c.library_id "
         "FROM topics t JOIN sections s ON t.section_id=s.id "
-        "JOIN chapters c ON s.chapter_id=c.id"
+        "JOIN chapters c ON s.chapter_id=c.id LEFT JOIN topic_edits e ON e.topic_id=t.id"
     ).fetchall()
     conn.executemany(
         "INSERT INTO search_fts(ref,kind,title,body,library_id,chapter_id,section_id) "
@@ -620,8 +623,11 @@ def reset_content(conn):
 
 
 def build(content=DEFAULT_CONTENT, db_path=None, include_step1=False,
-          wipe_user=False, reset=True):
-    conn = dbmod.connect(db_path)
+          wipe_user=False, reset=True, seed=True):
+    """Rebuild base.db from the content folder, then re-apply your structure changes.
+    ``seed=False`` leaves user.db alone entirely (used after a restore)."""
+    migratemod.ensure(dbmod.paths(db_path)[2])
+    conn = dbmod.connect(db_path, journal=False)
     dbmod.init_schema(conn)
     if reset:
         print("Resetting content tables…")
@@ -639,13 +645,14 @@ def build(content=DEFAULT_CONTENT, db_path=None, include_step1=False,
     print("Loading collections…")
     nitems = load_collections(conn, content)
     print(f"  collection items={nitems}")
-    print("Seeding user state…")
-    seed_user_state(conn, content, wipe=wipe_user)
-    seed_study_log(conn, content)
-    seed_settings(conn)
-    npins = seed_pins(conn)
-    ndeck = seed_decks(conn)
-    print(f"  pins={npins}  deck cards matched={ndeck}")
+    if seed:
+        print("Seeding user state…")
+        seed_user_state(conn, content, wipe=wipe_user)
+        seed_study_log(conn, content)
+        seed_settings(conn)
+        npins = seed_pins(conn)
+        ndeck = seed_decks(conn)
+        print(f"  pins={npins}  deck cards matched={ndeck}")
     dbmod.ensure_user_tables(conn)
     nrep = structmod.replay(conn)
     if nrep:
@@ -670,7 +677,7 @@ def build(content=DEFAULT_CONTENT, db_path=None, include_step1=False,
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build the TEMP-U local database")
     ap.add_argument("--content", default=DEFAULT_CONTENT)
-    ap.add_argument("--db", default=None)
+    ap.add_argument("--db", default=None, help="path to user.db (base.db is written next to it)")
     ap.add_argument("--step1", action="store_true", help="also load STEP 1 cards")
     ap.add_argument("--wipe-user", action="store_true", help="discard existing user state and reseed")
     ap.add_argument("--no-reset", action="store_true", help="do not clear content tables first")
@@ -678,7 +685,8 @@ def main(argv=None):
                     help="only re-render the stored topic documents (keeps everything else)")
     args = ap.parse_args(argv)
     if args.rerender:
-        conn = dbmod.connect(args.db)
+        migratemod.ensure(dbmod.paths(args.db)[2])
+        conn = dbmod.connect(args.db, journal=False)
         dbmod.init_schema(conn)
         rerender_documents(conn, args.content)
         conn.close()

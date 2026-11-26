@@ -29,10 +29,12 @@ You need **two** things from your current machine:
 1. **Media + content.** Copy your `content` and `assets` into `local\content`
    and `local\assets` (see "Where to put media" below).
 2. **The database** — you can either let the setup script build it from
-   `local\content`, **or** copy your already-built `data\tempu.db` straight into
-   the `data\` folder (faster, and keeps all your progress/notes/decks exactly).
+   `local\content`, **or** copy your already-built `data\` folder (`base.db` + `user.db` + `blobs\`, or an
+   older single `tempu.db`, which is upgraded automatically) into place (faster, and
+   keeps all your progress/notes/decks exactly). Or restore `user.db` from your cloud
+   backup: `python -m tempu.backup restore --remote tempu-drive:tempu-backup`.
 
-> Quickest path: copy your existing `data\tempu.db` **and** `local\assets`.
+> Quickest path: copy your existing `data\` folder **and** `local\assets`.
 > Then you don't need `local\content` at all — the database already contains the
 > text, and `assets` provides the pictures/videos.
 
@@ -77,12 +79,13 @@ the app finds it automatically. (Advanced: you can override with the
 
 1. **Copy** the project folder to the PC (e.g. `C:\usmle-study-guide`).
 2. **Add your data**: put `content` into `local\content` and `assets` into
-   `local\assets`. (Or copy your prebuilt `data\tempu.db` into `data\`.)
+   `local\assets`. (Or copy your prebuilt `data\` folder into place.)
 3. **Double-click `setup-windows.bat`.** It will:
    - install Git (for the launch-time updates) and Python 3.12 if not already there,
    - create a private virtual environment (`.venv`),
    - install the one dependency (Flask),
-   - build the database from `local\content` (unless `data\tempu.db` already exists).
+   - build the database from `local\content` (unless `data\base.db` or an old `data\tempu.db` already exists),
+   - install rclone for the optional cloud backup (Settings → Backup).
    The first run takes a few minutes (Python download). If it tells you Python
    was just installed, **close the window, open the folder again, and
    double-click `setup-windows.bat` once more.**
@@ -97,7 +100,7 @@ the app finds it automatically. (Advanced: you can override with the
 
 That's it — nothing is installed system-wide except Python (and Git, which
 enables the update-on-launch); everything else lives inside the project
-folder. Your data is never overwritten by an update: `data\tempu.db`,
+folder. Your data is never overwritten by an update: `data\` (`base.db`, `user.db`, `blobs\`),
 `local\content`, and `local\assets` are all outside the synced files.
 
 > Don't want the update check? Start the app with
@@ -132,7 +135,7 @@ folder. Your data is never overwritten by an update: `data\tempu.db`,
 | "this copy has N commit(s) the repo doesn't" | This folder was changed with git. Its version is kept as it is; push those commits to GitHub to make them the public version. |
 | "could not reach the repo" | You're probably offline. The app still starts with the installed version; it updates next time you're online. |
 | Images/videos don't show | They're missing from `local\assets`. Check `local\assets\media\<topicId>\`. |
-| No database / blank library | You have neither `data\tempu.db` nor `local\content`. Add one and re-run setup. |
+| No database / blank library | You have neither a `data\` database nor `local\content`. Add one and re-run setup. |
 | Windows SmartScreen warns on the Python installer | It's the official installer from python.org; choose "More info → Run anyway", or pre-install Python yourself from the Microsoft Store. |
 
 ---

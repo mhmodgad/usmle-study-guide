@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/overrides.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/modern.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/history.css') }}">
 <script>window.__sbKey='{{ "tempu-sidebar-reader" if reader_page else "tempu-sidebar" }}';try{var _sb=localStorage.getItem(window.__sbKey);{% if reader_page %}if(_sb===null)_sb='0';document.documentElement.classList.add('page-reader');{% endif %}if(_sb!=='0'&&window.matchMedia('(min-width: 768px)').matches)document.documentElement.classList.add('sb-open');var _lk=localStorage.getItem('tempu-look')||'{{ settings.get("look","classic") }}';if(_lk==='modern')document.documentElement.classList.add('look-modern');}catch(e){}</script>
 </head>
 <body class="min-h-full flex flex-col font-sans">
@@ -92,6 +93,7 @@
 </div>
 
 <script>window.TEMPU = {{ (tempu_js or {})|tojson }};</script>
+<script src="{{ url_for('static', filename='js/history.js') }}"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script src="{{ url_for('static', filename='js/note-editor.js') }}"></script>
 {% block scripts %}{% endblock %}

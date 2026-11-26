@@ -177,7 +177,7 @@
       <span class="ce-status">Saved</span>
       <span class="ce-pop-wrap"><button data-pop="more" title="More">${ic('<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>')}</button>
         <div class="ce-pop ce-menu" data-pop-body="more">
-          <button data-act="history">Earlier versions…</button>
+          <button data-act="history">Version history…</button>
           <button data-act="restore" class="ce-danger">Restore original content</button>
         </div></span>
       <button data-act="done" class="ce-done" title="Finish editing">Done</button>
@@ -260,6 +260,7 @@
 
     ed = {art, tid, root, title, tb, handle, dropLine, imgTools, tblTools, resizer, ghost, vline, alignZones, file: tb.querySelector('.ce-file'),
           dirty: false, saving: false, checkpointed: false, undo: [], redo: [], timer: null,
+          session: Math.random().toString(36).slice(2) + Date.now().toString(36),
           lastSnap: 0, selectedBlock: null, hoverBlock: null, dragBlock: null};
     snapshot(true);
     bind();
@@ -310,7 +311,7 @@
     ed.saving = true;
     clearTimeout(ed.timer);
     renumber(ed.root);
-    const payload = {html: cleanForSave(ed.root), title: ed.title.textContent.trim(), checkpoint: !ed.checkpointed};
+    const payload = {html: cleanForSave(ed.root), title: ed.title.textContent.trim(), checkpoint: !ed.checkpointed, session: ed.session};
     status('Saving…', 'saving');
     try {
       const r = await fetch(`/api/topics/${ed.tid}/content`, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
@@ -1471,8 +1472,8 @@
 
   async function restoreOriginal() {
     if (!ed) return;
-    if (!confirm('Throw away all your edits to this topic and go back to the original content?\n(Your edited version is kept under “Earlier versions”.)')) return;
-    const {art, tid} = ed;
+    if (!confirm('Go back to the original content of this topic?\n(You can undo this, and your edited version stays in Version history.)')) return;
+    const {tid} = ed;
     ed.dirty = false;
     teardown();
     await fetch(`/api/topics/${tid}/content`, {method: 'DELETE'});
@@ -1480,18 +1481,10 @@
   }
   async function showHistory() {
     if (!ed) return;
-    const list = await fetch(`/api/topics/${ed.tid}/history`).then(r => r.json());
-    if (!list.length) { toast('No earlier versions yet.'); return; }
-    const pick = prompt('Earlier versions (newest first):\n\n' +
-      list.map((h, i) => `${i + 1}. ${new Date(h.saved_at).toLocaleString()}  (${Math.round(h.size / 1024)} KB)`).join('\n') +
-      '\n\nType a number to restore that version:');
-    const i = parseInt(pick, 10) - 1;
-    if (!(i >= 0 && list[i])) return;
     const {tid} = ed;
-    ed.dirty = false;
-    await fetch(`/api/topics/${tid}/history/${list[i].id}/restore`, {method: 'POST'});
-    teardown();
-    location.hash = 'topic-' + tid; location.reload();
+    if (ed.dirty) await save();
+    if (window.TempuHistory) { window.TempuHistory.openTopic(tid); return; }
+    toast('Version history is not available.');
   }
 
   // ------------------------------------------------------------ entry points

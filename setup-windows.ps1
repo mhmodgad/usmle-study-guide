@@ -93,16 +93,35 @@ if ((Test-Path "local\css") -and -not (Test-Path "static\css\app.css")) {
 }
 
 # --- 5. Build the database ---------------------------------------------------
-if (Test-Path "data\tempu.db") {
-    Write-Host "`nDatabase already present (data\tempu.db) - skipping build."
+# (an old data\tempu.db is upgraded to base.db + user.db automatically on first start)
+if ((Test-Path "data\base.db") -or (Test-Path "data\tempu.db")) {
+    Write-Host "`nDatabase already present - skipping build."
 } elseif (Test-Path "local\content") {
-    Write-Host "`nBuilding database from local\content ..."
+    Write-Host "`nBuilding the library (data\base.db) from local\content ..."
     & $pyv -m tempu.loader
 } else {
-    Write-Host "`n[!] No data\tempu.db and no local\content found." -ForegroundColor Yellow
+    Write-Host "`n[!] No database and no local\content found." -ForegroundColor Yellow
     Write-Host "    Do ONE of these, then run setup again:" -ForegroundColor Yellow
-    Write-Host "      - copy your prebuilt data\tempu.db into the data\ folder, OR" -ForegroundColor Yellow
+    Write-Host "      - copy your prebuilt data\ folder (base.db + user.db) into place, OR" -ForegroundColor Yellow
     Write-Host "      - put your content under local\content\ (see local\README.md)" -ForegroundColor Yellow
+}
+
+# --- 6. rclone for cloud backup (optional) -----------------------------------
+if (-not (Have "rclone")) {
+    if (Have "winget") {
+        Write-Host "`nInstalling rclone (used for the optional cloud backup)..."
+        try {
+            winget install -e --id Rclone.Rclone --accept-source-agreements --accept-package-agreements
+            Refresh-Path
+        } catch { Write-Host "Could not install rclone - cloud backup stays off (the app works without it)." -ForegroundColor Yellow }
+    } else {
+        Write-Host "`nrclone is not installed - cloud backup (optional) needs it: https://rclone.org/downloads/" -ForegroundColor Yellow
+    }
+}
+if (Have "rclone") {
+    Write-Host "rclone found. To back up to Google Drive, run once:" -ForegroundColor Green
+    Write-Host "    rclone config create tempu-drive drive scope=drive.file" -ForegroundColor Green
+    Write-Host "  then turn it on in Settings > Backup." -ForegroundColor Green
 }
 
 Write-Host "`n==================================================" -ForegroundColor Green

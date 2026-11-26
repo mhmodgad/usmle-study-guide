@@ -25,25 +25,54 @@ VID_EXT = (".mp4", ".webm", ".mov", ".m4v")
 
 # Bump when the HTML this module emits changes; the app re-renders stored
 # topic documents automatically when the stored version is older.
-RENDER_VERSION = 2
+RENDER_VERSION = 3
 
 import re as _re_mod
 _XREF_RE = _re_mod.compile(r"^/r/(t|b)/([0-9a-f-]{36})(?:/([0-9a-f-]{36}))?")
+# Absolute links back into the live app (https://app.tempusmle.com/...) are
+# served by this app too, so they're turned into local paths.
+_LIVE_RE = _re_mod.compile(r"^(?:https?:)?//(?:app\.|www\.)?tempusmle\.com(?=[/?#]|$)", _re_mod.I)
+_SECTION_RE = _re_mod.compile(r"/sections/([0-9a-f-]{36})")
+
+
+def localize_href(href):
+    """https://app.tempusmle.com/<path>?<q>#<frag> -> /<path>#<frag> (else unchanged)."""
+    href = (href or "").strip()
+    m = _LIVE_RE.match(href)
+    if not m:
+        return href
+    rest = href[m.end():] or "/"
+    frag = ""
+    if "#" in rest:
+        rest, frag = rest.split("#", 1)
+        frag = "#" + frag
+    path = rest.split("?", 1)[0] or "/"   # drop live-only params like ?workspace=admin
+    if not path.startswith("/"):
+        path = "/" + path
+    return path + frag
 
 
 def link_open(href):
     """Opening <a> for a BlockNote link run.
 
-    In-app cross references (/r/t/<topicId>, /r/b/<topicId>/<blockId>) become
-    data-attributed links the reader resolves locally and opens in a split
-    view; anything else is a normal external link.
+    In-app cross references (/r/t/<topicId>, /r/b/<topicId>/<blockId>) and
+    section links (/libraries/.../sections/<id>) - relative or pointing at
+    app.tempusmle.com - become data-attributed links the reader resolves
+    locally and opens in the split view; anything else is a normal external link.
     """
-    href = href or ""
+    href = localize_href(href)
     m = _XREF_RE.match(href)
     if m:
         kind, tid, bid = m.group(1), m.group(2), m.group(3) or ""
         return (f'<a class="tempu-xref" href="/r/{kind}/{tid}{"/" + bid if bid else ""}" '
                 f'data-ref-topic="{tid}" data-ref-block="{bid}">')
+    if href.startswith("/"):
+        sm = _SECTION_RE.search(href.split("#", 1)[0])
+        if sm:
+            frag = ("#" + href.split("#", 1)[1]) if "#" in href else ""
+            return (f'<a class="tempu-xref" href="{H.escape(href, quote=True)}" '
+                    f'data-ref-section="{sm.group(1)}" data-ref-hash="{H.escape(frag, quote=True)}">')
+        return f'<a class="tempu-locallink" href="{H.escape(href, quote=True)}">'
     return (f'<a class="tempu-extlink" href="{H.escape(href, quote=True)}" '
             'target="_blank" rel="noopener noreferrer">')
 

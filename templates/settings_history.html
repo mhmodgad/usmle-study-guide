@@ -1,0 +1,109 @@
+{% extends "settings_layout.html" %}
+{% set settings_tab = 'history' %}
+{% set page_title = 'History' %}
+{% block settings_body %}
+<div class="flex flex-col gap-6">
+  <div>
+    <h2 class="text-lg font-semibold">History</h2>
+    <p class="text-sm text-muted-foreground">Every change you make to the library is recorded here. Undo any of them, or go back to a checkpoint. Shortcuts: <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes the latest change, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> redoes it. Topic text has its own <em>Version history</em> in the topic's ⋮ menu.</p>
+  </div>
+
+  <section class="th-card flex flex-col gap-3">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h3 class="font-semibold">Checkpoints</h3>
+      <form id="cp-form" class="flex gap-2">
+        <input id="cp-name" class="th-input" placeholder="e.g. Before reorganising Cardio" maxlength="80">
+        <button class="th-btn primary" type="submit">Save checkpoint</button>
+      </form>
+    </div>
+    <p class="th-muted">A checkpoint marks this moment. Restoring it undoes everything after it in one step, and that step can be undone too.</p>
+    <div id="cp-list" class="flex flex-col"></div>
+  </section>
+
+  <section class="flex flex-col gap-2">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h3 class="font-semibold">Activity</h3>
+      <div class="flex items-center gap-2">
+        <select id="act-kind" class="th-input">
+          <option value="">All changes</option>
+          <option value="structure">Structure (add, move, rename, delete)</option>
+          <option value="edit">Topic text</option>
+          <option value="undo">Undo</option>
+          <option value="redo">Redo</option>
+          <option value="restore">Checkpoint restores</option>
+        </select>
+        <a class="th-btn" href="/libraries">Trash is in each library's Organize page</a>
+      </div>
+    </div>
+    <div id="act-list"></div>
+    <button id="act-more" class="th-btn" hidden>Show older</button>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const H = window.TempuHistory, esc = H.esc;
+  const list = document.getElementById('act-list'), more = document.getElementById('act-more');
+  const kindSel = document.getElementById('act-kind');
+  let last = null;
+  const kindName = {structure: 'structure', edit: 'text', undo: 'undo', redo: 'redo', restore: 'restore', 'import': 'imported'};
+  async function load(reset) {
+    if (reset) { list.innerHTML = ''; last = null; }
+    const q = new URLSearchParams({limit: 50});
+    if (last) q.set('before', last);
+    if (kindSel.value) q.set('kind', kindSel.value);
+    const rows = await (await fetch('/api/history/changesets?' + q)).json();
+    if (!rows.length && !last) list.innerHTML = '<p class="th-muted">No changes yet.</p>';
+    rows.forEach(c => {
+      const el = document.createElement('div');
+      el.className = 'th-act-row' + (c.undone ? ' undone' : '');
+      el.innerHTML = `<span class="th-kind">${esc(kindName[c.kind] || c.kind)}</span>
+        <div class="th-act-main"><div class="th-act-label" title="${esc(c.label)}">${esc(c.label)}</div>
+        <div class="th-muted">${esc(H.when(c.at))}${c.undone ? ' · undone' : ''}${c.scope_kind === 'topic' && c.scope_id ? ' · <a href="#" data-hist="' + esc(c.scope_id) + '">versions</a>' : ''}</div></div>
+        ${c.can_undo ? '<button class="th-btn" data-undo>Undo</button>' : ''}${c.can_redo ? '<button class="th-btn primary" data-redo>Redo</button>' : ''}`;
+      el.querySelector('[data-undo]')?.addEventListener('click', () => H.undo(c.id));
+      el.querySelector('[data-redo]')?.addEventListener('click', () => H.redo(c.id));
+      el.querySelector('[data-hist]')?.addEventListener('click', e => { e.preventDefault(); H.openTopic(c.scope_id); });
+      list.appendChild(el);
+      last = c.id;
+    });
+    more.hidden = rows.length < 50;
+  }
+  more.addEventListener('click', () => load(false));
+  kindSel.addEventListener('change', () => load(true));
+
+  const cpList = document.getElementById('cp-list');
+  async function loadCps() {
+    const cps = await (await fetch('/api/history/checkpoints')).json();
+    cpList.innerHTML = cps.length ? '' : '<p class="th-muted">No checkpoints yet.</p>';
+    cps.forEach(cp => {
+      const el = document.createElement('div');
+      el.className = 'th-act-row';
+      el.innerHTML = `<div class="th-act-main"><div class="th-act-label">${esc(cp.name)}</div>
+        <div class="th-muted">${esc(H.when(cp.created_at))} · ${cp.changes_since} change${cp.changes_since === 1 ? '' : 's'} since</div></div>
+        <button class="th-btn primary" data-restore ${cp.changes_since ? '' : 'disabled'}>Restore</button>
+        <button class="th-btn danger" data-del>Remove</button>`;
+      el.querySelector('[data-restore]').addEventListener('click', async () => {
+        if (!confirm(`Undo the ${cp.changes_since} change(s) made after “${cp.name}”? You can undo this restore afterwards.`)) return;
+        const d = await (await fetch(`/api/history/checkpoints/${cp.id}/restore`, {method: 'POST'})).json();
+        H.reloadWith(d.changeset ? d.changeset.label : 'Restored', d.changeset ? {undo: d.changeset.id} : {});
+      });
+      el.querySelector('[data-del]').addEventListener('click', async () => {
+        await fetch(`/api/history/checkpoints/${cp.id}`, {method: 'DELETE'}); loadCps();
+      });
+      cpList.appendChild(el);
+    });
+  }
+  document.getElementById('cp-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const name = document.getElementById('cp-name').value.trim();
+    await fetch('/api/history/checkpoints', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name})});
+    document.getElementById('cp-name').value = '';
+    H.toast('Checkpoint saved');
+    loadCps();
+  });
+  load(true); loadCps();
+})();
+</script>
+{% endblock %}

@@ -500,7 +500,7 @@
     if (!img) return;
     e.preventDefault(); e.stopPropagation();
     openLightbox(img);
-  }, true);
+  });
   lb.addEventListener('click', e => { if (e.target !== lbImg) closeLightbox(); });
   lbImg.addEventListener('click', e => {           // click the open image to zoom in/out
     lbScale = lbScale === 1 ? 2 : 1;
@@ -624,11 +624,51 @@
     setUrlSplit(null);
   }
 
+  // Links that point at the live app (https://app.tempusmle.com/...) -> local
+  // paths on this server; xrefs and section links become split-view links.
+  const LIVE_HOST = /^(app\.|www\.)?tempusmle\.com$/i;
+  const XREF_PATH = /^\/r\/(t|b)\/([0-9a-f-]{36})(?:\/([0-9a-f-]{36}))?/;
+  const SECTION_PATH = /\/sections\/([0-9a-f-]{36})/;
+  function localizeLink(a) {
+    if (a.dataset.localized) return;
+    const raw = a.getAttribute('href') || '';
+    let u; try { u = new URL(raw, location.href); } catch (e) { return; }
+    const live = LIVE_HOST.test(u.hostname);
+    if (!live && u.origin !== location.origin) return;
+    a.dataset.localized = '1';
+    if (!live && a.classList.contains('tempu-xref')) return;
+    const m = XREF_PATH.exec(u.pathname);
+    const sm = !m && SECTION_PATH.exec(u.pathname);
+    if (live || m || sm) { a.removeAttribute('target'); a.removeAttribute('rel'); a.classList.remove('tempu-extlink'); }
+    if (m) {
+      a.classList.add('tempu-xref');
+      a.dataset.refTopic = m[2]; a.dataset.refBlock = m[3] || '';
+      a.setAttribute('href', '/r/' + m[1] + '/' + m[2] + (m[3] ? '/' + m[3] : ''));
+    } else if (sm) {
+      a.classList.add('tempu-xref');
+      a.dataset.refSection = sm[1]; a.dataset.refHash = u.hash || '';
+      a.setAttribute('href', u.pathname + u.hash);
+    } else if (live) {
+      a.classList.add('tempu-locallink');
+      a.setAttribute('href', u.pathname + u.search.replace(/([?&])workspace=[^&]*&?/, '$1').replace(/[?&]$/, '') + u.hash);
+    }
+  }
+  function localizeLinks(root) {
+    (root || document).querySelectorAll('.reader-root .bn-editor a[href]').forEach(localizeLink);
+  }
+  localizeLinks();
+  window.tempuLocalizeLinks = localizeLinks;
+
   async function openXref(a) {
-    const tid = a.dataset.refTopic, bid = a.dataset.refBlock;
-    const hash = bid ? '#block-' + bid : '#topic-' + tid;
-    let info;
-    try { info = await fetch('/api/xref/' + tid).then(r => r.json()); } catch (e) { info = {found: false}; }
+    let info, hash;
+    if (a.dataset.refSection) {
+      info = {found: true, section_id: a.dataset.refSection};
+      hash = a.dataset.refHash || '';
+    } else {
+      const tid = a.dataset.refTopic, bid = a.dataset.refBlock;
+      hash = bid ? '#block-' + bid : '#topic-' + tid;
+      try { info = await fetch('/api/xref/' + tid).then(r => r.json()); } catch (e) { info = {found: false}; }
+    }
     if (!info.found) {
       a.classList.add('is-missing');
       toast('“' + a.textContent.trim() + '” isn’t in your offline library yet.');
@@ -642,7 +682,10 @@
     openSplit(info.section_id, hash);
   }
   document.addEventListener('click', e => {
-    const a = e.target.closest('.bn-editor a.tempu-xref');
+    // only links inside the topic content; nav (prev/next, breadcrumbs) navigates normally
+    const link = e.target.closest('.reader-root .bn-editor a[href]');
+    if (link) localizeLink(link);          // catches content inserted after load (edits, toggles)
+    const a = e.target.closest('.reader-root .bn-editor a.tempu-xref');
     if (!a) return;
     if (a.closest('.topic-article.is-editing')) { e.preventDefault(); return; }
     if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;   // new tab: server resolves /r/...

@@ -438,11 +438,17 @@ def settings_index():
 
 @bp.route("/settings/<page>")
 def settings_sub(page):
-    valid = {"account", "personal", "preferences", "library", "notifications", "password"}
+    valid = {"account", "personal", "preferences", "library", "notifications", "password",
+             "history", "backup"}
     if page not in valid:
         abort(404)
     return render_template("settings_%s.html" % page, active="settings",
                            current=S.all_settings())
+
+
+@bp.route("/activity")
+def activity():
+    return redirect("/settings/history")
 
 
 # --------------------------------------------------------------- search
