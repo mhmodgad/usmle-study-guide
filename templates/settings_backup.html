@@ -5,10 +5,36 @@
 <div class="flex flex-col gap-6" id="bk">
   <div>
     <h2 class="text-lg font-semibold">Cloud backup</h2>
-    <p class="text-sm text-muted-foreground">Every change is saved on this computer the moment you make it. Cloud backup copies what you choose to Google Drive (or any <a class="text-primary hover:underline" href="https://rclone.org/overview/" target="_blank" rel="noopener">rclone remote</a>) in the background. If you're offline it simply waits. Files are stored unencrypted.</p>
+    <p class="text-sm text-muted-foreground">Every change is saved on this computer the moment you make it. Cloud backup copies what you choose to Google Drive in the background. If you're offline it simply waits. Files are stored unencrypted.</p>
   </div>
 
   <div id="bk-status" class="th-banner">Loading…</div>
+
+  <section class="th-card flex flex-col gap-3">
+    <p class="text-sm font-medium">Where</p>
+    <div id="gd-off" class="flex flex-col gap-2">
+      <div class="th-actions">
+        <button class="th-btn primary" id="gd-connect" type="button" style="padding:.5rem 1rem;font-size:.9rem">Connect Google Drive</button>
+        <span class="th-muted">One click: gets rclone if needed, opens Google sign-in, then switches backup on. Uses only a <code>tempu-backup</code> folder it creates in your Drive (free 15 GB).</span>
+      </div>
+      <div id="gd-progress" class="th-banner" hidden></div>
+    </div>
+    <div id="gd-on" class="th-actions" hidden>
+      <span class="text-sm">✓ Backing up to <b>Google Drive</b> · folder <code>tempu-backup</code></span>
+      <button class="th-btn danger" id="gd-disconnect" type="button">Disconnect</button>
+    </div>
+    <details class="text-sm" id="bk-advanced">
+      <summary class="cursor-pointer font-medium">Use another remote (Dropbox, OneDrive, a folder…)</summary>
+      <div class="mt-2 flex flex-col gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <input id="bk-remote" class="th-input" style="flex:1;min-width:16rem" placeholder="myremote:tempu-backup  or  D:\Backups\tempu">
+          <button class="th-btn" id="bk-test" type="button">Test connection</button>
+        </div>
+        <p class="th-muted" id="bk-rclone-help"></p>
+        <p class="th-muted">Any <a class="text-primary hover:underline" href="https://rclone.org/overview/" target="_blank" rel="noopener">rclone remote</a> works: set it up with <code>rclone config</code>, type <code>name:folder</code> here, test, then Save. A plain folder path (a USB drive, a synced folder) works too.</p>
+      </div>
+    </details>
+  </section>
 
   <section class="th-card flex flex-col gap-3">
     <label class="th-switch"><input type="checkbox" id="bk-enabled"> Back up automatically</label>
@@ -27,23 +53,6 @@
       <p class="th-muted">Untick anything you don't want in the cloud. The last three are large and can be rebuilt from your own copies, so they start unticked.</p>
     </div>
     <div class="th-cats" id="bk-cats"></div>
-  </section>
-
-  <section class="th-card flex flex-col gap-3">
-    <p class="text-sm font-medium">Where</p>
-    <div class="flex flex-wrap items-center gap-2">
-      <input id="bk-remote" class="th-input" style="flex:1;min-width:16rem" placeholder="tempu-drive:tempu-backup">
-      <button class="th-btn" id="bk-test" type="button">Test connection</button>
-    </div>
-    <p class="th-muted" id="bk-rclone-help"></p>
-    <details class="text-sm">
-      <summary class="cursor-pointer font-medium">Set up Google Drive (one time)</summary>
-      <ol class="mt-2 list-decimal pl-5 text-sm text-muted-foreground" style="display:grid;gap:.35rem">
-        <li>Install rclone: Linux/macOS <code>curl https://rclone.org/install.sh | sudo bash</code> · Windows <code>winget install Rclone.Rclone</code> (or run the setup script again).</li>
-        <li>In a terminal run <code>rclone config create tempu-drive drive scope=drive.file</code>. A browser opens; sign in to Google and allow access. <code>drive.file</code> lets rclone see only the files it creates.</li>
-        <li>Type <code>tempu-drive:tempu-backup</code> above, press <b>Test connection</b>, then <b>Save</b>.</li>
-      </ol>
-    </details>
   </section>
 
   <section class="th-card flex flex-col gap-3">
@@ -93,8 +102,8 @@
     $('bk-cats').innerHTML = cats.map(c => `<label class="th-cat"><input type="checkbox" data-cat="${c.key}" ${c.on ? 'checked' : ''}>
       <span><span class="text-sm font-medium">${esc(c.label)}</span><br><span class="th-muted">${esc(c.description)}</span></span>
       <span class="th-size">${esc(sizeWord[c.size] || c.size)}</span></label>`).join('');
-    $('bk-rclone-help').textContent = d.rclone ? 'rclone is installed.' : 'rclone was not found on this computer — see the setup steps below.';
-    status(); log();
+    $('bk-rclone-help').textContent = d.rclone ? 'rclone is installed.' : 'rclone is not installed yet — "Connect Google Drive" downloads it, or install it from rclone.org.';
+    showWhere(); status(); log(); pollConnect();
   }
   function collect() {
     const categories = {};
@@ -105,7 +114,7 @@
   }
   async function save() {
     const body = collect();
-    if (body.enabled && !body.remote) { $('bk-msg').textContent = 'Choose where to back up first.'; return false; }
+    if (body.enabled && !body.remote) { $('bk-msg').textContent = 'Connect Google Drive (or choose another remote) first.'; return false; }
     const r = await fetch('/api/backup/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     $('bk-msg').textContent = r.ok ? 'Saved.' : 'Could not save.';
     status();
@@ -179,6 +188,41 @@
       });
     });
   });
+  // ---- one-click Google Drive
+  function showWhere() {
+    const drive = (cfg.remote || '').startsWith('tempu-drive:');
+    $('gd-on').hidden = !drive; $('gd-off').hidden = drive;
+    if (cfg.remote && !drive) $('bk-advanced').open = true;
+  }
+  let gdTimer = null;
+  async function pollConnect() {
+    const st = await (await fetch('/api/backup/connect-drive')).json();
+    const box = $('gd-progress'), btn = $('gd-connect');
+    const busy = ['downloading', 'waiting', 'finishing'].includes(st.state);
+    btn.disabled = busy;
+    btn.textContent = busy ? 'Connecting…' : 'Connect Google Drive';
+    if (st.state === 'idle' || st.state === 'cancelled' || !st.state) { box.hidden = true; btn.disabled = false; btn.textContent = 'Connect Google Drive'; return; }
+    box.hidden = false;
+    box.className = 'th-banner' + (st.state === 'error' ? ' err' : '');
+    box.innerHTML = esc(st.message || '') +
+      (st.auth_url ? ` <a class="th-btn primary" style="margin-left:.4rem" href="${esc(st.auth_url)}" target="_blank" rel="noopener">Open Google sign-in</a>` : '') +
+      (busy ? ' <button class="th-btn" id="gd-cancel" type="button" style="margin-left:.4rem">Cancel</button>' : '');
+    const c = document.getElementById('gd-cancel');
+    if (c) c.onclick = () => fetch('/api/backup/connect-drive/cancel', {method: 'POST'});
+    if (busy) { gdTimer = setTimeout(pollConnect, 1500); return; }
+    if (st.state === 'done') { await load(); setTimeout(() => { status(); log(); }, 1500); }
+  }
+  $('gd-connect').addEventListener('click', async () => {
+    clearTimeout(gdTimer);
+    await fetch('/api/backup/connect-drive', {method: 'POST'});
+    pollConnect();
+  });
+  $('gd-disconnect').addEventListener('click', async () => {
+    if (!confirm('Stop backing up to Google Drive? Backups already in your Drive are kept.')) return;
+    await fetch('/api/backup/disconnect-drive', {method: 'POST'});
+    await load();
+  });
+
   $('bk-enabled').addEventListener('change', () => { if ($('bk-enabled').checked && !$('bk-remote').value.trim()) $('bk-remote').focus(); });
   load();
 })();

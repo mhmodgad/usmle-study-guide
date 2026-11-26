@@ -142,7 +142,13 @@ def _meta(conn, key, value=None):
 # ------------------------------------------------------------------ rclone
 def rclone_path(cfg):
     p = cfg.get("rclone") or os.environ.get("TEMPU_RCLONE") or shutil.which("rclone")
-    return p if p and (os.path.isfile(p) or shutil.which(p)) else None
+    if p and (os.path.isfile(p) or shutil.which(p)):
+        return p
+    for name in ("rclone.exe", "rclone"):            # downloaded by "Connect Google Drive"
+        local = os.path.join(dbmod.DATA_DIR, "tools", name)
+        if os.path.isfile(local):
+            return local
+    return None
 
 
 def _rclone(cfg, *args, timeout=3600, input_text=None):
@@ -150,7 +156,8 @@ def _rclone(cfg, *args, timeout=3600, input_text=None):
     if not exe:
         raise BackupError("rclone is not installed (see Settings → Backup for how to install it).")
     try:
-        p = subprocess.run([exe, *args], capture_output=True, text=True, timeout=timeout, input=input_text)
+        p = subprocess.run([exe, *args], capture_output=True, text=True, timeout=timeout, input=input_text,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.TimeoutExpired:
         raise BackupError("rclone timed out: " + " ".join(args[:2]))
     if p.returncode != 0:
@@ -176,6 +183,179 @@ def test_remote(cfg):
     if got.strip() != "ok":
         raise BackupError("The test file came back different.")
     return "Connected: rclone can write to %s" % cfg["remote"]
+
+
+# ------------------------------------------------------------------ one-click Google Drive
+DRIVE_REMOTE = "tempu-drive"
+DRIVE_FOLDER = "tempu-backup"
+_CONNECT = {"state": "idle"}          # idle | downloading | waiting | finishing | done | error | cancelled
+_PROC = {"p": None}
+_CONNECT_LOCK = threading.Lock()
+
+
+def _set_connect(**kw):
+    with _CONNECT_LOCK:
+        if kw.get("state") in ("downloading",):
+            _CONNECT.clear()
+        _CONNECT.update(kw)
+
+
+def connect_status():
+    with _CONNECT_LOCK:
+        return dict(_CONNECT)
+
+
+def _platform_tag():
+    import platform
+    sysname = {"Windows": "windows", "Darwin": "osx", "Linux": "linux"}.get(platform.system(), "linux")
+    m = platform.machine().lower()
+    arch = "arm64" if m in ("arm64", "aarch64") else ("386" if m in ("i386", "i686", "x86") else "amd64")
+    return sysname, arch
+
+
+def install_rclone(data_dir):
+    """Download the official rclone build into data/tools (no admin rights, no installer).
+    Returns the path to the rclone executable."""
+    import io
+    import urllib.request
+    import zipfile
+    sysname, arch = _platform_tag()
+    exe_name = "rclone.exe" if sysname == "windows" else "rclone"
+    tools = os.path.join(data_dir, "tools")
+    target = os.path.join(tools, exe_name)
+    if os.path.isfile(target):
+        return target
+    os.makedirs(tools, exist_ok=True)
+    urls = []
+    try:   # newest release on GitHub
+        with urllib.request.urlopen("https://api.github.com/repos/rclone/rclone/releases/latest", timeout=20) as r:
+            tag = json.loads(r.read().decode())["tag_name"]
+        urls.append(f"https://github.com/rclone/rclone/releases/download/{tag}/rclone-{tag}-{sysname}-{arch}.zip")
+    except Exception:  # noqa: BLE001
+        pass
+    urls.append(f"https://downloads.rclone.org/rclone-current-{sysname}-{arch}.zip")
+    pinned = "v1.68.2"   # known-good fallback if the two above are unreachable
+    urls.append(f"https://github.com/rclone/rclone/releases/download/{pinned}/rclone-{pinned}-{sysname}-{arch}.zip")
+    last_err = None
+    for url in urls:
+        try:
+            with urllib.request.urlopen(url, timeout=120) as r:
+                blob = r.read()
+            with zipfile.ZipFile(io.BytesIO(blob)) as z:
+                member = next(n for n in z.namelist() if n.rsplit("/", 1)[-1] == exe_name)
+                tmp = target + ".part"
+                with z.open(member) as src, open(tmp, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            os.replace(tmp, target)
+            if sysname != "windows":
+                os.chmod(target, 0o755)
+            return target
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    raise BackupError("Could not download rclone (%s). Install it yourself from https://rclone.org/downloads/ "
+                      "and press the button again." % last_err)
+
+
+def _remote_has_token(cfg, name):
+    try:
+        dump = json.loads(_rclone(cfg, "config", "dump", timeout=60) or "{}")
+    except (BackupError, ValueError):
+        return False
+    return bool((dump.get(name) or {}).get("token"))
+
+
+def connect_drive(db_path, timeout=600):
+    """The whole Google Drive setup in one go (run in a background thread):
+    rclone present?  -> else download it into data/tools
+    remote present?  -> else `rclone config create tempu-drive drive scope=drive.file`,
+                        which opens Google sign-in in the browser and waits for it
+    then point the backup at tempu-drive:tempu-backup, test it, switch backup on
+    and start the first backup."""
+    import re
+    conn = dbmod.connect(db_path, journal=False)
+    try:
+        cfg = get_config(conn)
+        _, _, data_dir, _ = _dirs(db_path)
+        if not rclone_path(cfg):
+            _set_connect(state="downloading", message="Downloading rclone (about 25 MB, one time)…")
+            exe = install_rclone(data_dir)
+            cfg = save_config(conn, {"rclone": exe})
+        else:
+            _set_connect(state="downloading", message="Checking rclone…")
+        if not _remote_has_token(cfg, DRIVE_REMOTE):
+            try:
+                _rclone(cfg, "config", "delete", DRIVE_REMOTE, timeout=60)   # half-finished earlier attempt
+            except BackupError:
+                pass
+            _set_connect(state="waiting", message="Sign in to Google in the browser tab that just opened, "
+                                                  "then allow access. Waiting…")
+            proc = subprocess.Popen([rclone_path(cfg), "config", "create", DRIVE_REMOTE, "drive",
+                                     "scope=drive.file"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            _PROC["p"] = proc
+            timed_out = {"v": False}
+
+            def _give_up():
+                timed_out["v"] = True
+                proc.kill()
+            watchdog = threading.Timer(timeout, _give_up)
+            watchdog.daemon = True
+            watchdog.start()
+            out_lines = []
+            try:
+                for line in proc.stdout:            # rclone prints the sign-in link, then waits
+                    out_lines.append(line)
+                    m = re.search(r"(http://127\.0\.0\.1:\d+/auth\?state=[\w-]+)", line)
+                    if m:
+                        _set_connect(auth_url=m.group(1))
+                proc.wait()
+            finally:
+                watchdog.cancel()
+                _PROC["p"] = None
+            if timed_out["v"]:
+                raise BackupError("Google sign-in wasn't finished within %d minutes. Press the button to try again."
+                                  % (timeout // 60))
+            if connect_status().get("state") == "cancelled":
+                raise BackupError("Cancelled.")
+            if proc.returncode != 0 or not _remote_has_token(cfg, DRIVE_REMOTE):
+                tail = "".join(out_lines[-3:]).strip()
+                raise BackupError("Google sign-in did not complete." + (" " + tail if tail else ""))
+        _set_connect(state="finishing", message="Connected. Checking that backups can be written…", auth_url=None)
+        cfg = save_config(conn, {"remote": f"{DRIVE_REMOTE}:{DRIVE_FOLDER}"})
+        test_remote(cfg)
+        save_config(conn, {"enabled": True})
+        _set_connect(state="done", message="Google Drive connected. Backup is on — the first backup is running now.")
+    except Exception as e:  # noqa: BLE001
+        if connect_status().get("state") != "cancelled":
+            _set_connect(state="error", message=str(e), auth_url=None)
+        return
+    finally:
+        conn.close()
+    _WORKER["wake"].set()
+    run(db_path)
+
+
+def cancel_connect():
+    _set_connect(state="cancelled", message="Cancelled.", auth_url=None)
+    p = _PROC.get("p")
+    if p:
+        p.kill()
+
+
+def disconnect_drive(db_path):
+    conn = dbmod.connect(db_path, journal=False)
+    try:
+        cfg = get_config(conn)
+        try:
+            _rclone(cfg, "config", "delete", DRIVE_REMOTE, timeout=60)
+        except BackupError:
+            pass
+        if cfg["remote"].startswith(DRIVE_REMOTE + ":"):
+            save_config(conn, {"enabled": False, "remote": ""})
+    finally:
+        conn.close()
+    _set_connect(state="idle")
 
 
 # ------------------------------------------------------------------ state

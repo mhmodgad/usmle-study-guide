@@ -85,7 +85,8 @@ the app finds it automatically. (Advanced: you can override with the
    - create a private virtual environment (`.venv`),
    - install the one dependency (Flask),
    - build the database from `local\content` (unless `data\base.db` or an old `data\tempu.db` already exists),
-   - install rclone for the optional cloud backup (Settings → Backup).
+   - install rclone for the optional cloud backup (or let Settings → Backup →
+     **Connect Google Drive** download it for you).
    The first run takes a few minutes (Python download). If it tells you Python
    was just installed, **close the window, open the folder again, and
    double-click `setup-windows.bat` once more.**

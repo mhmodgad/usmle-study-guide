@@ -14,6 +14,7 @@ data/*.migrating*
 # files you add with the in-app editor (content-addressed) + local backup copies
 data/blobs/
 data/backup/
+data/tools/
 data/uploads/
 data/uploads.migrated/
 # small browser-tab icon generated from your logo at runtime

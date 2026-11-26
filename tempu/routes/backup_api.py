@@ -84,3 +84,26 @@ def restore():
 @bp.route("/restore/result")
 def restore_result():
     return jsonify(dict(B._RESTORE_RESULT))
+
+
+@bp.route("/connect-drive", methods=["GET", "POST"])
+def connect_drive():
+    """One click: install rclone if needed, Google sign-in, configure, switch on, first backup."""
+    if request.method == "POST":
+        st = B.connect_status()
+        if st.get("state") not in ("downloading", "waiting", "finishing"):
+            B._set_connect(state="downloading", message="Starting…")
+            B.run_in_background(_db(), fn=B.connect_drive)
+    return jsonify(B.connect_status())
+
+
+@bp.route("/disconnect-drive", methods=["POST"])
+def disconnect_drive():
+    B.disconnect_drive(_db())
+    return jsonify({"ok": True})
+
+
+@bp.route("/connect-drive/cancel", methods=["POST"])
+def connect_drive_cancel():
+    B.cancel_connect()
+    return jsonify({"ok": True})

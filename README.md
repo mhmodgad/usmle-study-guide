@@ -199,12 +199,13 @@ Each run uploads new files first, then a filtered, gzipped snapshot of
 data to bring back; a copy of your current `user.db` is kept in `data/backup/`
 first. Backups are not encrypted.
 
-One-time Google Drive setup:
-
-```bash
-rclone config create tempu-drive drive scope=drive.file   # browser sign-in; rclone sees only its own files
-# Settings -> Backup: remote = tempu-drive:tempu-backup, Test connection, tick "Back up automatically"
-```
+Google Drive setup is one click: **Settings → Backup → Connect Google Drive**.
+It downloads rclone into `data/tools/` if it isn't installed (no admin rights),
+opens Google sign-in in your browser (scope `drive.file`: rclone only sees the
+`tempu-backup` folder it creates), then switches backup on and runs the first
+one. The Google token is kept in rclone's own config, never in the app or the
+repo. Any other rclone remote, or a plain folder, can be used under
+"Use another remote".
 
 Command line: `python -m tempu.backup status | run | list | restore [NAME] [--only notes,study]`
 and `python -m tempu.backup config enabled=1 remote=tempu-drive:tempu-backup categories.media=1`.
