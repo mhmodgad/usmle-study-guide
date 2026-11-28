@@ -62,7 +62,9 @@ def _cards_for_scope(scope, scope_id, limit=None, order="ordinal"):
 def cards():
     scope = request.args.get("scope", "all")
     scope_id = request.args.get("id", "")
-    limit = request.args.get("limit")
+    limit = request.args.get("limit", type=int)
+    if limit is not None and limit <= 0:
+        limit = None
     order = request.args.get("order", "ordinal")
     rows = [] if scope == "mine" else _cards_for_scope(scope, scope_id, limit=limit, order=order)
     out = [S.render_card(r) for r in rows]
@@ -223,7 +225,9 @@ def topic_note(topic_id):
 # ------------------------------------------------------------- highlights
 @bp.route("/highlights", methods=["POST"])
 def add_highlight():
-    d = request.get_json(force=True)
+    d = request.get_json(force=True) or {}
+    if not d.get("topic_id"):
+        return jsonify({"ok": False, "error": "topic_id is required"}), 400
     hid = d.get("id") or _uid()
     g.db.execute(
         "INSERT OR REPLACE INTO highlights(id,topic_id,color,selected_text,prefix_text,"
@@ -256,7 +260,9 @@ def del_highlight(hid):
 # ------------------------------------------------------------- inline notes
 @bp.route("/inline-notes", methods=["POST"])
 def add_inline_note():
-    d = request.get_json(force=True)
+    d = request.get_json(force=True) or {}
+    if not d.get("topic_id"):
+        return jsonify({"ok": False, "error": "topic_id is required"}), 400
     nid = d.get("id") or _uid()
     g.db.execute(
         "INSERT OR REPLACE INTO inline_notes(id,topic_id,note_text,selected_text,prefix_text,"
@@ -843,8 +849,8 @@ def structure_update(kind, item_id):
     with _hist.Change(g.db, label, kind="structure", scope=(kind, item_id)) as ch:
         if "title" in d and not _st.rename(g.db, kind, item_id, d["title"]):
             raise _Abort(jsonify({"error": "not found or empty title"}), 400)
-        if "icon_path" in d:
-            _st.set_icon(g.db, kind, item_id, d["icon_path"] or None)
+        if "icon_path" in d and not _st.set_icon(g.db, kind, item_id, d["icon_path"] or None):
+            raise _Abort(jsonify({"error": "not found (is it in the trash?)"}), 404)
         if moving:
             _st.move(g.db, kind, item_id, dest, d.get("order"), d.get("index"))
         if kind == "topic" and ("title" in d or moving):

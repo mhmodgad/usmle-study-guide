@@ -7,6 +7,20 @@ $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
 function Have($cmd) { return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
+# A working Python 3.8+? ("python" can be the Microsoft Store placeholder,
+# which exists on PATH but only opens the Store.)
+function Test-Py($exe, $extra) {
+    if (-not (Have $exe)) { return $false }
+    try {
+        $out = & $exe @($extra + @("-c", "import sys; print(sys.version_info >= (3, 8))")) 2>$null
+        return ($LASTEXITCODE -eq 0 -and "$out".Trim() -eq "True")
+    } catch { return $false }
+}
+function Find-Python {
+    if (Test-Py "py" @("-3")) { return "py -3" }
+    if (Test-Py "python" @()) { return "python" }
+    return $null
+}
 function Refresh-Path {
     $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
                 [Environment]::GetEnvironmentVariable("Path","User")
@@ -40,9 +54,7 @@ if (-not (Have "git")) {
 if (Have "git") { Write-Host "Git found: $(git --version)" -ForegroundColor Green }
 
 # --- 1. Ensure Python is installed -------------------------------------------
-$py = $null
-if (Have "py")     { $py = "py -3" }
-elseif (Have "python") { $py = "python" }
+$py = Find-Python
 
 if (-not $py) {
     Write-Host "`nPython is not installed. Installing Python 3.12..." -ForegroundColor Yellow
@@ -60,8 +72,7 @@ if (-not $py) {
     }
     # refresh PATH in this session
     Refresh-Path
-    if (Have "py")     { $py = "py -3" }
-    elseif (Have "python") { $py = "python" }
+    $py = Find-Python
     if (-not $py) {
         throw "Python was installed but is not on PATH yet. Close this window, open a NEW one, and run setup again."
     }
@@ -78,6 +89,9 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
     }
     Write-Host "`nCreating virtual environment (.venv)..."
     Invoke-Expression "$py -m venv .venv"
+    if (-not (Test-Path ".venv\Scripts\python.exe")) {
+        throw "Could not create the virtual environment (.venv). Read the messages above, then run setup again."
+    }
 }
 $pyv = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 
@@ -85,6 +99,9 @@ $pyv = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 Write-Host "`nInstalling dependencies (Flask)..."
 & $pyv -m pip install --upgrade pip --quiet
 & $pyv -m pip install -r requirements.txt
+if ($LASTEXITCODE -ne 0) {
+    throw "Installing the dependencies failed (see above). Check your internet connection and run setup again."
+}
 
 # --- 4. Build the stylesheet (only if source CSS is present and app.css is missing)
 if ((Test-Path "local\css") -and -not (Test-Path "static\css\app.css")) {
@@ -92,6 +109,7 @@ if ((Test-Path "local\css") -and -not (Test-Path "static\css\app.css")) {
     & $pyv -m tempu.build_css
 }
 
+$noLibrary = $false
 # --- 5. Build the database ---------------------------------------------------
 # (an old data\tempu.db is upgraded to base.db + user.db automatically on first start)
 if ((Test-Path "data\base.db") -or (Test-Path "data\tempu.db")) {
@@ -99,7 +117,11 @@ if ((Test-Path "data\base.db") -or (Test-Path "data\tempu.db")) {
 } elseif (Test-Path "local\content") {
     Write-Host "`nBuilding the library (data\base.db) from local\content ..."
     & $pyv -m tempu.loader
+    if ($LASTEXITCODE -ne 0) {
+        throw "Building the library failed (see above). Fix the problem and run setup again."
+    }
 } else {
+    $noLibrary = $true
     Write-Host "`n[!] No database and no local\content found." -ForegroundColor Yellow
     Write-Host "    Do ONE of these, then run setup again:" -ForegroundColor Yellow
     Write-Host "      - copy your prebuilt data\ folder (base.db + user.db) into place, OR" -ForegroundColor Yellow
@@ -124,6 +146,13 @@ if (Have "rclone") {
     Write-Host "  then turn it on in Settings > Backup." -ForegroundColor Green
 }
 
+if ($noLibrary) {
+    Write-Host "`n==================================================" -ForegroundColor Yellow
+    Write-Host "  Setup finished, but there is no library yet (see the yellow message above)." -ForegroundColor Yellow
+    Write-Host "  Add your data, then run setup again." -ForegroundColor Yellow
+    Write-Host "==================================================" -ForegroundColor Yellow
+    exit 0
+}
 Write-Host "`n==================================================" -ForegroundColor Green
 Write-Host "  Setup complete." -ForegroundColor Green
 Write-Host "  Start the app by double-clicking:  run-windows.bat" -ForegroundColor Green

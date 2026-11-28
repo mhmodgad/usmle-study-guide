@@ -234,6 +234,9 @@ def ensure_render_current(db_path=None, content=None):
         if not conn.execute("SELECT 1 FROM topics LIMIT 1").fetchone():
             conn.close()
             return False
+        if not os.path.isdir(os.path.join(content or DEFAULT_CONTENT, "sections")):
+            conn.close()      # copied data without local/content: nothing to re-render from
+            return False
         print("Updating stored topic documents for the new reader (one time)…")
         rerender_documents(conn, content)
         conn.close()

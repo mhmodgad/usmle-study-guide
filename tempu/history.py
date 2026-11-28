@@ -69,6 +69,21 @@ def new_id(at=None, offset=0):
     return "%012x%s" % (ms + offset, os.urandom(4).hex())
 
 
+def _next_id(conn):
+    """A new changeset id that sorts after every existing one. Undo/redo
+    "latest" go by id order, so two changes in the same millisecond (random
+    tail) or a clock that was set back must never put a new change before an
+    older one."""
+    cid = new_id()
+    last = conn.execute("SELECT MAX(id) FROM changesets").fetchone()[0]
+    if last and cid <= last:
+        try:
+            cid = "%012x%s" % (int(last[:12], 16) + 1, os.urandom(4).hex())
+        except ValueError:
+            pass
+    return cid
+
+
 # ------------------------------------------------------------------ triggers
 _TRIGGER_SQL = {}
 
@@ -318,7 +333,7 @@ class Change:
                          (now, self.label, n, target))
             self.rows = n
             return
-        self.id = new_id()
+        self.id = _next_id(conn)
         conn.execute("INSERT INTO changesets(id,created_at,updated_at,label,kind,scope_kind,scope_id,"
                      "session,reverts,undone,n_rows) VALUES(?,?,?,?,?,?,?,?,?,0,?)",
                      (self.id, now, now, self.label, self.kind, self.scope_kind, self.scope_id,

@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .DS_Store
+# your hand-edited start/setup scripts, set aside by the updater
+*.local-edit
 
 # Your data: base.db (rebuildable content), user.db (your changes + study state),
 # and the old single-file tempu.db kept after the upgrade

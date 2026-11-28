@@ -123,7 +123,10 @@ def save_config(conn, changes):
         elif k in ("enabled",):
             cfg[k] = bool(v)
         elif k in ("interval_hours", "keep_recent", "keep_daily", "keep_monthly"):
-            cfg[k] = max(0, int(v))
+            try:
+                cfg[k] = max(0, int(float(v)))
+            except (TypeError, ValueError):
+                pass                       # not a number: keep the current value
         elif k == "schedule" and v in ("auto", "interval", "manual"):
             cfg[k] = v
         elif k in ("remote", "rclone"):
@@ -160,7 +163,10 @@ def _rclone(cfg, *args, timeout=3600, input_text=None):
     if not exe:
         raise BackupError("rclone is not installed (see Settings → Backup for how to install it).")
     try:
-        p = subprocess.run([exe, *args], capture_output=True, text=True, timeout=timeout, input=input_text,
+        # rclone always speaks UTF-8; Windows would otherwise decode with the
+        # system code page (e.g. cp1256) and choke on names it can't map
+        p = subprocess.run([exe, *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout, input=input_text,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.TimeoutExpired:
         raise BackupError("rclone timed out: " + " ".join(args[:2]))
@@ -303,6 +309,7 @@ def connect_drive(db_path, timeout=600):
             proc = subprocess.Popen([rclone_path(cfg), "config", "create", DRIVE_REMOTE, "drive",
                                      "scope=drive.file"],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                    encoding="utf-8", errors="replace",
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             _PROC["p"] = proc
             timed_out = {"v": False}
@@ -483,6 +490,15 @@ def make_snapshot(db_path, categories, out_dir):
             dst.execute(f'DELETE FROM "{t}"')
         else:
             counts[t] = dst.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+    # what this snapshot holds, inside the file itself: the .json next to it can
+    # be missing or unreadable, and a restore must never treat a category that
+    # was left out (its tables are empty here) as "restore it as empty"
+    included = sorted(c for c, on in categories.items() if on and c in CATEGORIES)
+    try:
+        dst.execute("INSERT OR REPLACE INTO user_meta(key,value) VALUES('snapshot_categories',?)",
+                    (json.dumps(included),))
+    except sqlite3.OperationalError:
+        pass
     last_cs = None
     if "changesets" in keep:
         r = dst.execute("SELECT MAX(id) FROM changesets").fetchone()
@@ -742,6 +758,25 @@ def snapshot_info(cfg, name):
         return {"name": name}
 
 
+def _snapshot_categories(conn, snap_tables):
+    """Categories held by the attached snapshot ``snap``: recorded in the file
+    by newer versions; for older snapshots, those with any rows."""
+    if "user_meta" in snap_tables:
+        r = conn.execute("SELECT value FROM snap.user_meta WHERE key='snapshot_categories'").fetchone()
+        if r:
+            try:
+                return set(json.loads(r[0]))
+            except ValueError:
+                pass
+    held = set()
+    for c, (_, _, tables, _, _) in CATEGORIES.items():
+        for t in tables:
+            if t in snap_tables and conn.execute(f'SELECT 1 FROM snap."{t}" LIMIT 1').fetchone():
+                held.add(c)
+                break
+    return held
+
+
 def restore(db_path=None, name=None, only=None, rebuild=True):
     """Bring back the chosen categories from a cloud snapshot (default: the newest).
 
@@ -764,7 +799,9 @@ def restore(db_path=None, name=None, only=None, rebuild=True):
                 raise BackupError("There are no backups in %s yet." % cfg["remote"])
             name = names[0]
         info = snapshot_info(cfg, name)
-        cats = [c for c in (only or info.get("categories") or [k for k in CATEGORIES])
+        # unknown contents: the small categories only (the large optional items
+        # are restored only when you ask for them)
+        cats = [c for c in (only or info.get("categories") or [k for k in CATEGORIES if CATEGORIES[k][2]])
                 if c in CATEGORIES and (not info.get("categories") or c in info["categories"]
                                         or c in ("base", "source", "media"))]
         work = tempfile.mkdtemp(prefix="restore-", dir=local_dir)
@@ -802,6 +839,14 @@ def restore(db_path=None, name=None, only=None, rebuild=True):
         _step("Restoring your data…")
         conn.execute("ATTACH DATABASE ? AS snap", (raw,))
         snap_tables = {r[0] for r in conn.execute("SELECT name FROM snap.sqlite_master WHERE type='table'")}
+        if not info.get("categories"):
+            # The .json next to the snapshot was missing: never wipe a category
+            # the snapshot doesn't hold (its tables are empty in the file).
+            held = _snapshot_categories(conn, snap_tables)
+            skipped = [c for c in cats if CATEGORIES[c][2] and c not in held]
+            cats = [c for c in cats if c not in skipped]
+        else:
+            skipped = []
         restored = {}
         conn.execute("PRAGMA foreign_keys=OFF")
         try:
@@ -820,29 +865,44 @@ def restore(db_path=None, name=None, only=None, rebuild=True):
         finally:
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("DETACH DATABASE snap")
-        if "files" in cats:
+        if "files" in cats and restored.get("blobs"):
+            # (no files in the backup = no blobs folder in the cloud, and
+            # "rclone copy" of a missing folder fails the whole restore)
             _step("Downloading files you added…")
             _rclone(cfg, "copy", _join(cfg["remote"], "blobs"), blobmod.blob_dir(data_dir))
             blobmod.index_untracked(conn, data_dir)
             conn.execute("UPDATE blobs SET uploaded_at=COALESCE(uploaded_at, ?)", (_iso(),))
             conn.commit()
+        # The large items are optional and may never have been backed up: one
+        # that isn't in the cloud is reported as skipped, it doesn't fail the
+        # restore of your data above (which is already in place by now).
         if "source" in cats:
             _step("Downloading captured content…")
-            _rclone(cfg, "copy", _join(cfg["remote"], "content/source"), content_dir())
+            try:
+                _rclone(cfg, "copy", _join(cfg["remote"], "content/source"), content_dir())
+            except BackupError:
+                skipped.append("source")
         if "media" in cats:
             _step("Downloading original media…")
-            _rclone(cfg, "copy", _join(cfg["remote"], "content/media"), os.path.join(assets_dir(), "media"))
+            try:
+                _rclone(cfg, "copy", _join(cfg["remote"], "content/media"), os.path.join(assets_dir(), "media"))
+            except BackupError:
+                skipped.append("media")
         conn.close()
         conn = None
         rebuilt = False
         if "base" in cats:
             _step("Downloading the content database…")
             tmp = os.path.join(work, "base.db")
-            _rclone(cfg, "copyto", _join(cfg["remote"], "content/base.db"), tmp)
-            src, dst = sqlite3.connect(tmp), sqlite3.connect(base)
-            src.backup(dst)                     # replaces base.db's content in place
-            src.close(); dst.close()
-            rebuilt = True
+            try:
+                _rclone(cfg, "copyto", _join(cfg["remote"], "content/base.db"), tmp)
+            except BackupError:
+                skipped.append("base")
+            else:
+                src, dst = sqlite3.connect(tmp), sqlite3.connect(base)
+                src.backup(dst)                     # replaces base.db's content in place
+                src.close(); dst.close()
+                rebuilt = True
         if "edits" in cats and rebuild and not rebuilt:
             # the served library must match the restored structure: rebuild + replay
             _step("Rebuilding the library with your restored changes…")
@@ -855,7 +915,8 @@ def restore(db_path=None, name=None, only=None, rebuild=True):
                 structure.replay(c3)
                 c3.close()
         shutil.rmtree(work, ignore_errors=True)
-        return {"ok": True, "snapshot": name, "categories": cats, "tables": restored, "safety_copy": safety}
+        return {"ok": True, "snapshot": name, "categories": [c for c in cats if c not in skipped],
+                "tables": restored, "safety_copy": safety, "skipped": skipped}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
     finally:

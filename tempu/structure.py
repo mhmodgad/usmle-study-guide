@@ -143,12 +143,18 @@ def rename(conn, kind, item_id, title):
 
 
 def set_icon(conn, kind, item_id, icon_path):
+    """Returns False (and changes nothing) for an item that isn't in the library,
+    e.g. one in the trash: an icon set there would be invisible now but would
+    show up after the next library rebuild."""
     t, _ = _table(kind)
+    if not _row(conn, kind, item_id):
+        return False
     if kind == "topic":
         conn.execute("UPDATE topics SET icon_url=? WHERE id=?", (icon_path, item_id))
     else:
         conn.execute(f"UPDATE {t} SET icon_path=? WHERE id=?", (icon_path or None, item_id))
     _upsert(conn, kind, item_id, icon_path=icon_path or "")   # "" = icon removed
+    return True
 
 
 def _write_order(conn, kind, parent_id, ordered_ids):
@@ -169,7 +175,10 @@ def move(conn, kind, item_id, parent_id, ordered_ids=None, index=None):
         sibs = [r["id"] for r in conn.execute(
             f"SELECT id FROM {t} WHERE {pcol}=? AND id<>? ORDER BY sort_order, rowid",
             (parent_id, item_id))]
-        index = len(sibs) if index is None else max(0, min(int(index), len(sibs)))
+        try:
+            index = len(sibs) if index is None else max(0, min(int(index), len(sibs)))
+        except (TypeError, ValueError):
+            index = len(sibs)
         sibs.insert(index, item_id)
         ordered_ids = sibs
     else:
@@ -305,26 +314,30 @@ def replay(conn):
                          "plain_text,has_cards,updated_at) VALUES(?,?,?,?,1,'','',0,?)",
                          (o["id"], o["parent_id"], o["title"], o["sort_order"] or 0, o["updated_at"]))
         n += 1
-    # 2) moves / order / renames / icons
+    # 2) moves / order / renames / icons. Also for items in the trash (they are
+    # rebuilt too, and step 3 re-collects them for restore): without this, a
+    # renamed or moved item restored after a rebuild came back with its old
+    # name/place, and changed again at the next rebuild.
+    # Every move is applied before anything is removed for sitting in a trashed
+    # parent: a topic moved out of a section that later went into the trash
+    # (inside a chapter you deleted) must be in its new place first, or it
+    # would be removed together with its old section.
+    gone = []
     for o in rows:
-        if o["deleted"]:
+        if o["deleted"] == 2:
             continue
         k = o["kind"]
         t, pcol = _table(k)
         if not _row(conn, k, o["id"]):
             continue
+        parent_ok = True
         if o["parent_id"] and pcol:
             ptab = {"chapter": "libraries", "section": "chapters", "topic": "sections"}[k]
-            if not conn.execute(f"SELECT 1 FROM {ptab} WHERE id=?", (o["parent_id"],)).fetchone():
-                # moved into something that is now in the trash: it goes with it
-                # (the trashed parent's payload holds it for restore)
-                acc = {}
-                _collect(conn, k, o["id"], acc)
-                _delete_rows(conn, acc)
-                n += 1
-                continue
+            parent_ok = bool(conn.execute(f"SELECT 1 FROM {ptab} WHERE id=?", (o["parent_id"],)).fetchone())
+            if not parent_ok and not o["deleted"]:
+                gone.append(o)
         sets, vals = [], []
-        if o["parent_id"] and pcol:
+        if o["parent_id"] and pcol and parent_ok:
             sets.append(f"{pcol}=?"); vals.append(o["parent_id"])
         if o["sort_order"] is not None:
             sets.append("sort_order=?"); vals.append(o["sort_order"])
@@ -335,8 +348,20 @@ def replay(conn):
         if sets:
             conn.execute(f"UPDATE {t} SET {', '.join(sets)} WHERE id=?", (*vals, o["id"]))
             n += 1
-    # 3) deletions (content items come back on every rebuild; remove them again)
-    for o in rows:
+    for o in gone:
+        # moved into something that is now in the trash: it goes with it
+        # (the trashed parent's payload holds it for restore)
+        acc = {}
+        _collect(conn, o["kind"], o["id"], acc)
+        if acc:
+            _delete_rows(conn, acc)
+            n += 1
+    # 3) deletions (content items come back on every rebuild; remove them again).
+    # Innermost first: a section you trashed on its own before trashing its
+    # chapter must be gone before the chapter's restore payload is re-collected,
+    # or restoring the chapter would bring that section back as well.
+    depth = {"topic": 0, "section": 1, "chapter": 2, "library": 3}
+    for o in sorted(rows, key=lambda r: depth.get(r["kind"], 9)):
         if not o["deleted"]:
             continue
         acc = {}

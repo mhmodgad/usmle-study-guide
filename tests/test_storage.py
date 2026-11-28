@@ -221,3 +221,45 @@ def test_pruning_keeps_exactly_what_retention_says(env, tmp_path):
     assert len(left) == 2
     files = [f for _, _, fs in os.walk(os.path.join(remote, "snapshots")) for f in fs]
     assert sorted(f for f in files if f.endswith(".json")) == sorted(n[:-3] + ".json" for n in left)
+
+
+@pytest.mark.skipif(not shutil.which("rclone"), reason="rclone not installed")
+def test_restore_without_the_snapshot_info_never_wipes_what_was_not_backed_up(env, tmp_path):
+    """The .json next to a snapshot says what it holds. Without it, every
+    category was restored - and categories left out of the backup (empty in
+    the file) wiped your local data, e.g. all your decks."""
+    db, c, ids = env["db"], env["client"], env["ids"]
+    c.post("/api/decks", json={"name": "Mine"})
+    c.post("/api/progress/topic", json={"topic_id": ids["topics"][0], "completed": True})
+    remote = str(tmp_path / "remote" / "tempu-backup")
+    conn = dbmod.connect(db, journal=False)
+    B.save_config(conn, {"enabled": True, "remote": remote, "categories": {"flashcards": False}})
+    conn.close()
+    assert B.run(db)["ok"] == 1
+    for dp, _, fs in os.walk(os.path.join(remote, "snapshots")):
+        for f in fs:
+            if f.endswith(".json"):
+                os.remove(os.path.join(dp, f))
+    out = B.restore(db, None, None, rebuild=False)
+    assert out["ok"], out
+    assert "flashcards" in out["skipped"] and "study" in out["categories"]
+    conn = dbmod.connect(db, journal=False)
+    assert conn.execute("SELECT COUNT(*) FROM decks").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM progress").fetchone()[0] == 1
+    conn.close()
+
+
+@pytest.mark.skipif(not shutil.which("rclone"), reason="rclone not installed")
+def test_restore_everything_when_you_never_added_a_file(env, tmp_path):
+    """No files added = no blobs folder in the cloud; restoring with "Files you
+    added" ticked (the default) used to fail the whole restore."""
+    db, c, ids = env["db"], env["client"], env["ids"]
+    c.post("/api/progress/topic", json={"topic_id": ids["topics"][0], "completed": True})
+    remote = str(tmp_path / "remote" / "tempu-backup")
+    conn = dbmod.connect(db, journal=False)
+    B.save_config(conn, {"enabled": True, "remote": remote})
+    conn.close()
+    assert B.run(db)["ok"] == 1
+    assert not os.path.exists(os.path.join(remote, "blobs"))
+    out = B.restore(db, None, None, rebuild=False)
+    assert out["ok"], out

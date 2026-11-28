@@ -244,7 +244,9 @@
     const wait = async () => {
       const {d: res} = await getJSON('/api/backup/restore/result');
       if (res.ok === undefined) return setTimeout(wait, 2000);
-      if (res.ok) H.reloadWith('Restored ' + res.categories.length + ' kind(s) of data from the backup');
+      if (res.ok) H.reloadWith('Restored ' + res.categories.length + ' kind(s) of data from the backup' +
+        ((res.skipped || []).length ? ' (not in this backup, left as they were: ' +
+          res.skipped.map(k => (cats.find(c => c.key === k) || {label: k}).label).join(', ') + ')' : ''));
       else { btn.disabled = false; $('bk-status').className = 'th-banner err'; $('bk-status').textContent = 'Restore failed: ' + res.error; }
     };
     setTimeout(wait, 1500);

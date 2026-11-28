@@ -131,8 +131,8 @@ folder. Your data is never overwritten by an update: `data\` (`base.db`, `user.d
 |---|---|
 | "Python is not recognized" after install | Close the window, open a new one, run `setup-windows.bat` again. Windows only picks up the new PATH in fresh windows. |
 | `setup-windows.bat` closes instantly | Run it from PowerShell to see the error: `powershell -ExecutionPolicy Bypass -File setup-windows.ps1` |
-| Port 5000 is busy | Is the app already running (check the taskbar)? Otherwise start on another port: `.\.venv\Scripts\python.exe -m tempu.launch --port 5050` then open http://127.0.0.1:5050/ |
-| "local edits to … are in the way" on launch | Someone changed those files in this folder. The update was skipped and the app still works. To take the update, undo those edits (or commit them), then launch again. |
+| Port 5000 is busy | Starting the app again while it is running just opens it in your browser. If another program uses port 5000, start on another port: `.\.venv\Scripts\python.exe -m tempu.launch --port 5050` then open http://127.0.0.1:5050/ |
+| "local edits to … are in the way" on launch | Someone changed those files in this folder. The update was skipped and the app still works. To take the update, undo those edits (or commit them), then launch again. (An edited `run-windows.bat` / `setup-windows.*` is not in the way: it is saved as `<name>.local-edit` and replaced by the update.) |
 | "this copy has N commit(s) the repo doesn't" | This folder was changed with git. Its version is kept as it is; push those commits to GitHub to make them the public version. |
 | "could not reach the repo" | You're probably offline. The app still starts with the installed version; it updates next time you're online. |
 | Images/videos don't show | They're missing from `local\assets`. Check `local\assets\media\<topicId>\`. |

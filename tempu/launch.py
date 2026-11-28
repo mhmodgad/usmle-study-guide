@@ -96,6 +96,32 @@ def _blocked_files(out):
     return files
 
 
+# The start/setup scripts are app code, not your data. A hand-edited copy (for
+# example a workaround for a bug the update fixes) would otherwise block every
+# future update, so it is kept next to the original and replaced.
+SCRIPTS = ("run-windows.bat", "setup-windows.bat", "setup-windows.ps1", "run.sh", "setup.sh")
+
+
+def _set_aside_scripts(git, blocked, say):
+    """Keep a copy of locally edited launcher scripts (<name>.local-edit) and
+    reset them to the committed version. True if every blocked file was one."""
+    if not blocked or any(f not in SCRIPTS for f in blocked):
+        return False
+    import shutil
+    for f in blocked:
+        src = os.path.join(PROJECT, f)
+        try:
+            shutil.copy2(src, src + ".local-edit")
+        except OSError:
+            return False
+        rc, _ = _run(git, "checkout", "--", f)
+        if rc != 0:
+            return False
+        say("[update] your edited %s was saved as %s.local-edit; "
+            "the updated version replaces it" % (f, f))
+    return True
+
+
 def _link(git):
     """Make a copied folder (no .git) a repository that tracks the public repo."""
     rc, out = _run(git, "init", "--quiet", "--branch", BRANCH)
@@ -231,6 +257,8 @@ def selfupdate(verbose=True):
         _, diff = _run(git, "diff", "--name-only", "HEAD", latest, "--",
                        "requirements.txt")
         rc, out = _run(git, "merge", "--ff-only", "--quiet", latest)
+        if rc != 0 and _set_aside_scripts(git, _blocked_files(out), say):
+            rc, out = _run(git, "merge", "--ff-only", "--quiet", latest)
         if rc != 0:
             blocked = _blocked_files(out)
             if blocked:
@@ -255,6 +283,47 @@ def selfupdate(verbose=True):
         return False
 
 
+def _has_topics(path):
+    """True if the SQLite file at path has a non-empty topics table (read-only:
+    never creates or changes the file)."""
+    import sqlite3
+    try:
+        from urllib.request import pathname2url
+        conn = sqlite3.connect("file:%s?mode=ro" % pathname2url(os.path.abspath(path)), uri=True)
+        try:
+            return conn.execute("SELECT 1 FROM topics LIMIT 1").fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - missing, locked, not a database, no table
+        return False
+
+
+def data_problem(data_dir=None):
+    """None when there is a library to show, otherwise what to do about it.
+
+    Accepted: data/base.db with content (the current layout), or an older
+    single-file data/tempu.db, which the app upgrades on its first start."""
+    if data_dir is None:
+        from tempu import db as dbmod
+        data_dir = dbmod.DATA_DIR
+    base = os.path.join(data_dir, "base.db")
+    legacy = os.path.join(data_dir, "tempu.db")
+    if os.path.isfile(legacy) or _has_topics(base):
+        return None
+    win = os.name == "nt"
+    setup = "setup-windows.bat" if win else "./setup.sh"
+    content = os.path.join("local", "content")
+    if os.path.isfile(base):
+        what = "The library database (%s) is empty or unreadable." % base
+    else:
+        what = "No library database found in %s." % data_dir
+    return ("%s\n"
+            "Do one of these, then start the app again:\n"
+            "  - put your content in %s and run %s (it builds the library), or\n"
+            "  - copy your prebuilt data folder (base.db + user.db, or an old tempu.db) into %s"
+            % (what, content, setup, data_dir))
+
+
 def _port_free(host, port):
     """True if nothing is listening on host:port yet."""
     import socket
@@ -268,6 +337,24 @@ def _port_free(host, port):
             return True
         except OSError:
             return False
+
+
+def _is_this_app(url):
+    """True if the server answering at url is this app (it redirects / to /dashboard)."""
+    import urllib.error
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+    try:
+        opener.open(url, timeout=3)
+    except urllib.error.HTTPError as e:
+        return e.code in (301, 302, 303, 307, 308) and (e.headers.get("Location") or "").endswith("/dashboard")
+    except OSError:
+        return False
+    return False
 
 
 def _open_browser(url):
@@ -313,18 +400,38 @@ def main(argv=None):
                     help="check for updates and exit (no server)")
     a = ap.parse_args(argv)
 
+    url = "http://%s:%d/" % (a.host, a.port)
+    if a.update_only:
+        if not _port_free(a.host, a.port) and _is_this_app(url):
+            print("The app is running - close it first, then update.")
+            return 1
+        selfupdate()
+        return 0
+    if not _port_free(a.host, a.port):
+        if _is_this_app(url):
+            # started a second time (double-clicked again): just show the running one
+            print("The app is already running at %s - opening it in your browser." % url)
+            if not a.no_browser:
+                import webbrowser
+                webbrowser.open(url)
+            return 0
+        print("Port %d is already in use by another program. Close it, or start "
+              "the app on another port with: --port 5050" % a.port)
+        return 1
+
+    # (updating only now: never change the files under an app that is running)
     if not a.no_update:
         selfupdate()
-    if a.update_only:
-        return 0
+
+    # Checked here, AFTER the update, rather than in run-windows.bat / run.sh:
+    # a wrong check in a launcher script used to stop the app before the
+    # update that fixes it could ever run.
+    problem = data_problem()
+    if problem:
+        print(problem)
+        return 1
 
     from tempu.app import app  # imported after the update, so new code is used
-
-    url = "http://%s:%d/" % (a.host, a.port)
-    if not _port_free(a.host, a.port):
-        print("Port %d is already in use - is the app already running? Open %s "
-              "in your browser, or start with: --port 5050" % (a.port, url))
-        return 1
     print("Starting the USMLE Study Guide at %s  (press Ctrl+C to stop)" % url)
     if not a.no_browser:
         import threading
